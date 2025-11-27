@@ -1,4 +1,4 @@
-name: Fon Veri Botu (IsYatirim Secure)
+name: Fon Veri Botu (Proxy)
 
 on:
   schedule:
@@ -19,7 +19,6 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # Sadece bunlar yeterli
       run: |
         pip install curl_cffi pandas firebase-admin
 
