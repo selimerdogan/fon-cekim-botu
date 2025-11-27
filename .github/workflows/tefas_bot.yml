@@ -1,0 +1,29 @@
+name: Tefas Veri Botu
+
+on:
+  schedule:
+    # Hafta içi her gün UTC 18:00'de (TR saatiyle 21:00) çalışır
+    - cron: '0 18 * * 1-5'
+  workflow_dispatch: # Manuel tetiklemek istersen diye
+
+jobs:
+  update-funds:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Depoyu Çek (Checkout)
+      uses: actions/checkout@v3
+
+    - name: Python Kurulumu
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Kütüphaneleri Yükle
+      run: |
+        pip install requests pandas firebase-admin
+
+    - name: Botu Çalıştır
+      env:
+        FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+      run: python main.py
