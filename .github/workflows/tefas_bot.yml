@@ -1,4 +1,4 @@
-name: Tefas Tarihsel Veri Botu
+name: Fon Veri Botu (Is Yatirim)
 
 on:
   schedule:
@@ -19,8 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
+      # Sadece temel kütüphaneler yeterli
       run: |
-        pip install selenium webdriver-manager pandas firebase-admin requests
+        pip install requests pandas firebase-admin
 
     - name: Scripti Çalıştır
       env:
