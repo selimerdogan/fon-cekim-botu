@@ -1,86 +1,87 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from curl_cffi import requests
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
-import time
-import io
 
-def get_data_with_selenium_pandas():
-    print("Selenium ile Bigpara'ya gidiliyor...")
+def get_data_from_isyatirim_secure():
+    # İş Yatırım JSON Endpoint
+    url = "https://www.isyatirim.com.tr/_Layouts/15/IsYatirim.Website/Common/Data.aspx/GetFundReturnList"
     
-    # Chrome Ayarları
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    today = datetime.now()
+    doc_date_str = today.strftime("%Y-%m-%d")
+    
+    # Parametreler (Günlük Getiri Listesi)
+    params = {
+        "period": "1",
+        "endOfMonth": "false"
+    }
+    
+    # Bu Headerlar sunucuyu tarayıcı olduğumuza inandırır
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.isyatirim.com.tr/tr-tr/analiz/fon/Sayfalar/Fon-Arama.aspx",
+        "Origin": "https://www.isyatirim.com.tr",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest"
+    }
+    
+    print(f"İş Yatırım (JSON) üzerinden veri çekiliyor... ({doc_date_str})")
     
     try:
-        url = "https://bigpara.hurriyet.com.tr/yatirim-fonlari/tum-fon-verileri/"
-        driver.get(url)
+        # requests yerine curl_cffi kullanıyoruz -> impersonate="chrome120"
+        response = requests.get(
+            url, 
+            params=params, 
+            headers=headers, 
+            impersonate="chrome120",
+            timeout=30
+        )
         
-        print("Sayfa açıldı, verilerin yüklenmesi bekleniyor (10sn)...")
-        time.sleep(10) # JavaScript'in tabloyu doldurması için bekleme süresi
-        
-        # Sayfanın o anki dolu halini al
-        page_source = driver.page_source
-        
-        # Pandas ile HTML içindeki tabloları tara
-        print("Tablo okunuyor...")
-        # io.StringIO kullanarak bellekten okuyoruz
-        dfs = pd.read_html(io.StringIO(page_source), thousands='.', decimal=',')
-        
-        if not dfs:
-            print("HATA: Sayfada hiç tablo bulunamadı.")
+        # 404 veya 403 gelirse hata fırlat
+        if response.status_code != 200:
+            print(f"Sunucu Hatası Kodu: {response.status_code}")
             return None, None
             
-        # Genelde ilk tablo fon tablosudur
-        df = dfs[0]
-        
-        # Sütunları küçük harfe çevirip kontrol et
-        df.columns = [str(c).lower() for c in df.columns]
-        
-        # 'kod' ve 'fiyat' (veya son) içeren sütunları bul
-        code_col = next((c for c in df.columns if 'kod' in c), None)
-        # Bigpara'da fiyat sütunu genelde 'son' veya 'fiyat' adındadır
-        price_col = next((c for c in df.columns if 'son' in c or 'fiyat' in c), None)
-        
-        if not code_col or not price_col:
-            # Bulamazsak 1. ve 3. sütunu varsayalım (Bigpara standardı)
-            code_col = df.columns[0]
-            price_col = df.columns[2]
+        # JSON verisini al
+        try:
+            data = response.json()
+        except Exception:
+            # Bazen sunucu JSON yerine HTML hata dönerse
+            print("HATA: JSON formatı bozuk veya HTML döndü.")
+            return None, None
             
-        print(f"Sütunlar bulundu -> Kod: {code_col}, Fiyat: {price_col}")
+        if not data:
+            print("HATA: Veri boş geldi.")
+            return None, None
+            
+        # DataFrame oluştur
+        df = pd.DataFrame(data)
         
-        # Temizleme
-        df = df[[code_col, price_col]].copy()
-        df.columns = ['FONKODU', 'FIYAT']
-        
-        # Veri tiplerini düzelt
+        # İş Yatırım'da sütun adları: 'Code', 'Price' (İsimler değişebilir, kontrol ediyoruz)
+        # Genelde Code = Fon Kodu, Price = Son Fiyat
+        if 'Code' in df.columns and 'Price' in df.columns:
+            df = df[['Code', 'Price']]
+            df.columns = ['FONKODU', 'FIYAT']
+        else:
+            print(f"Beklenen sütunlar bulunamadı. Mevcut sütunlar: {df.columns}")
+            return None, None
+            
+        # Temizlik
         df['FONKODU'] = df['FONKODU'].astype(str).str.strip()
         df['FIYAT'] = pd.to_numeric(df['FIYAT'], errors='coerce')
         df = df.dropna(subset=['FIYAT'])
         
+        # Sözlüğe çevir
         fund_dict = dict(zip(df['FONKODU'], df['FIYAT']))
-        
-        today = datetime.now()
-        doc_date_str = today.strftime("%Y-%m-%d")
         
         return fund_dict, doc_date_str
 
     except Exception as e:
-        print(f"Selenium Hatası: {e}")
+        print(f"Bağlantı Hatası: {e}")
         return None, None
-    finally:
-        driver.quit()
 
 def save_history_to_firebase(fund_data, doc_date):
     if not fund_data:
@@ -89,7 +90,6 @@ def save_history_to_firebase(fund_data, doc_date):
     try:
         cred_json = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
         cred = credentials.Certificate(cred_json)
-        # Initialize kontrolü
         try:
             firebase_admin.get_app()
         except ValueError:
@@ -111,7 +111,7 @@ def save_history_to_firebase(fund_data, doc_date):
         print(f"Firebase Hatası: {e}")
 
 if __name__ == "__main__":
-    data, date_id = get_data_with_selenium_pandas()
+    data, date_id = get_data_from_isyatirim_secure()
     if data:
         save_history_to_firebase(data, date_id)
     else:
