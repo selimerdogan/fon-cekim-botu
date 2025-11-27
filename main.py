@@ -1,65 +1,83 @@
-import requests
+from curl_cffi import requests
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
+import io
 
-def get_fund_data_from_isyatirim():
-    # İş Yatırım'ın verileri çektiği "Arka Kapı" (JSON Endpoint)
-    url = "https://www.isyatirim.com.tr/_Layouts/15/IsYatirim.Website/Common/Data.aspx/GetFundReturnList"
+def get_data_from_bigpara():
+    # Hürriyet Bigpara - Tüm Fonlar Sayfası
+    # Bu sayfa HTML tablosu olarak tüm fonları listeler ve bot koruması düşüktür.
+    url = "https://bigpara.hurriyet.com.tr/yatirim-fonlari/tum-fon-verileri/"
     
     today = datetime.now()
     doc_date_str = today.strftime("%Y-%m-%d")
-    display_date = today.strftime("%d.%m.%Y")
     
-    params = {
-        "period": "1",  # Günlük Getiri tablosu (Güncel fiyatları içerir)
-        "endOfMonth": "false"
-    }
-    
-    print(f"İş Yatırım üzerinden veriler çekiliyor... ({display_date})")
+    print(f"Bigpara üzerinden veriler çekiliyor... ({doc_date_str})")
     
     try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
+        # Gerçek bir tarayıcı gibi istek atıyoruz
+        response = requests.get(
+            url, 
+            impersonate="chrome120",
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        )
         
-        # İş Yatırım verisi direkt JSON listesi olarak döner
-        data = response.json()
+        # Sayfa içeriğini Pandas ile okuyoruz (HTML Table Parsing)
+        # Bigpara'da tablo genellikle ilk bulunan tablodur.
+        # thousands='.' ve decimal=',' parametreleri Türk Lirası formatını (1.234,56) otomatik çözer.
+        dfs = pd.read_html(io.StringIO(response.text), thousands='.', decimal=',')
         
-        if not data:
-            print("Veri boş döndü.")
-            return None, None
-
-        # Veriyi DataFrame'e al
-        df = pd.DataFrame(data)
-        
-        # Sütun isimleri İş Yatırım'da şöyledir: 'Code', 'Price' (veya benzeri)
-        # Gelen veriyi kontrol edip doğru sütunları alalım.
-        # Genelde: 'Code' -> Fon Kodu, 'Price' -> Fiyat
-        
-        if 'Code' in df.columns and 'Price' in df.columns:
-            df = df[['Code', 'Price']]
-            df.columns = ['FONKODU', 'FIYAT']
-        else:
-            print("Beklenen sütunlar (Code, Price) bulunamadı.")
-            print(f"Mevcut sütunlar: {df.columns}")
+        if not dfs:
+            print("HATA: Sayfada tablo bulunamadı.")
             return None, None
             
-        # Fiyat sayısal mı kontrol et, değilse düzelt
-        # İş Yatırım genelde sayıyı 'double' gönderir, string gelirse düzeltiriz.
-        if df['FIYAT'].dtype == 'object':
-             df['FIYAT'] = df['FIYAT'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-             df['FIYAT'] = pd.to_numeric(df['FIYAT'])
-             
-        # Map formatına çevir { "AFT": 12.34, ... }
+        df = dfs[0] # İlk tabloyu al
+        
+        # Sütun isimlerini kontrol edelim ve temizleyelim
+        # Bigpara sütunları genelde: [Fon Kodu, Fon Adı, Fiyat, ...] şeklindedir.
+        # Ancak bazen sütun isimleri değişebilir, biz pozisyona göre de alabiliriz.
+        
+        # Sütun adlarını standartlaştırma
+        df.columns = [c.lower() for c in df.columns]
+        
+        # Fon Kodu ve Fiyat sütunlarını bulalım
+        # Genelde 'fon kodu' veya benzeri bir isimle gelir.
+        code_col = next((c for c in df.columns if 'kod' in c), None)
+        price_col = next((c for c in df.columns if 'fiyat' in c or 'son' in c), None)
+        
+        if not code_col or not price_col:
+            # İsimden bulamazsak, 1. sütun Kod, 3. sütun Fiyat varsayalım (Bigpara standardı)
+            print("Sütun isimleri tanınmadı, varsayılan indeksler kullanılıyor.")
+            code_col = df.columns[0]
+            price_col = df.columns[2] 
+            
+        print(f"Kullanılan Sütunlar -> Kod: {code_col}, Fiyat: {price_col}")
+        
+        # Veriyi temizle
+        df = df[[code_col, price_col]].copy()
+        df.columns = ['FONKODU', 'FIYAT']
+        
+        # Kod sütununu temizle (Bazen link falan olabilir)
+        df['FONKODU'] = df['FONKODU'].astype(str).str.strip()
+        
+        # Fiyat sayısal mı emin ol
+        df['FIYAT'] = pd.to_numeric(df['FIYAT'], errors='coerce')
+        
+        # Boş (NaN) fiyatları at
+        df = df.dropna(subset=['FIYAT'])
+        
+        # Map formatına çevir
         fund_dict = dict(zip(df['FONKODU'], df['FIYAT']))
         
         return fund_dict, doc_date_str
 
     except Exception as e:
-        print(f"İş Yatırım Bağlantı Hatası: {e}")
+        print(f"Veri Çekme Hatası: {e}")
         return None, None
 
 def save_history_to_firebase(fund_data, doc_date):
@@ -69,7 +87,11 @@ def save_history_to_firebase(fund_data, doc_date):
     try:
         cred_json = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
         cred = credentials.Certificate(cred_json)
-        firebase_admin.initialize_app(cred)
+        # Firebase zaten initialize edilmişse hata vermesin
+        try:
+            firebase_admin.initialize_app(cred)
+        except ValueError:
+            pass
         
         db = firestore.client()
         doc_ref = db.collection('fund_history').document(doc_date)
@@ -87,7 +109,7 @@ def save_history_to_firebase(fund_data, doc_date):
         print(f"Firebase Hatası: {e}")
 
 if __name__ == "__main__":
-    data, date_id = get_fund_data_from_isyatirim()
+    data, date_id = get_data_from_bigpara()
     if data:
         save_history_to_firebase(data, date_id)
     else:
