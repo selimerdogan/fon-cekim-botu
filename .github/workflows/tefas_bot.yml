@@ -1,4 +1,4 @@
-name: Fon Veri Botu (Selenium + Bigpara)
+name: Fon Veri Botu (IsYatirim Secure)
 
 on:
   schedule:
@@ -19,9 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # Hepsi bir arada tam liste
+      # Sadece bunlar yeterli
       run: |
-        pip install selenium webdriver-manager pandas firebase-admin lxml html5lib beautifulsoup4
+        pip install curl_cffi pandas firebase-admin
 
     - name: Scripti Çalıştır
       env:
