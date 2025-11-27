@@ -1,4 +1,4 @@
-name: Fon Veri Botu (Proxy)
+name: Fon Veri Botu (TradingView)
 
 on:
   schedule:
@@ -19,8 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
+      # En sade ve kararlı hali
       run: |
-        pip install curl_cffi pandas firebase-admin
+        pip install requests pandas firebase-admin
 
     - name: Scripti Çalıştır
       env:
