@@ -1,109 +1,64 @@
-from curl_cffi import requests
+import requests
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
-import random
-import time
 
-def get_free_proxies():
-    """İnternetten güncel ücretsiz proxy listesi çeker"""
-    print("Proxy listesi aranıyor...")
-    proxies = []
-    try:
-        # Hızlı ve güncel proxy listesi sunan kaynak
-        resp = requests.get("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", timeout=10)
-        if resp.status_code == 200:
-            for line in resp.text.splitlines():
-                if line.strip():
-                    proxies.append(f"http://{line.strip()}")
-        print(f"{len(proxies)} adet proxy bulundu.")
-        return proxies
-    except Exception as e:
-        print(f"Proxy listesi alınamadı: {e}")
-        return []
-
-def get_tefas_data_with_proxy():
-    url = "https://www.tefas.gov.tr/api/DB/BindComparisonFundReport"
+def get_data_from_tradingview():
+    # TradingView Türkiye Fon Tarama Endpoint'i
+    url = "https://scanner.tradingview.com/turkey/scan"
     
-    today = datetime.now()
-    date_str = today.strftime("%d.%m.%Y")
-    doc_date_str = today.strftime("%Y-%m-%d")
+    print("TradingView üzerinden fon verileri çekiliyor...")
     
-    headers = {
-        "Referer": "https://www.tefas.gov.tr/FonKarsilastirma.aspx",
-        "Origin": "https://www.tefas.gov.tr",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-    }
-    
+    # TradingView'den sadece "Yatırım Fonlarını" istiyoruz.
+    # Bu sorgu: Exchange = TEFAS olanları getirir.
     payload = {
-        "calismatipi": "2",
-        "fontip": "YAT",
-        "sfontip": "IYF",
-        "sonuctip": "MO",
-        "bastarih": date_str,
-        "bittarih": date_str,
-        "strperiod": "1,1,1,1,1,1,1"
+        "columns": ["name", "close", "description"],
+        "filter": [
+            {"left": "type", "operation": "equal", "right": "fund"},
+            {"left": "exchange", "operation": "equal", "right": "TEFAS"}
+        ],
+        "range": [0, 2000], # İlk 2000 fonu getir (Tümünü kapsar)
+        "sort": {"sortBy": "name", "sortOrder": "asc"}
     }
-
-    # Proxy listesini al
-    proxy_list = get_free_proxies()
-    # Listeyi karıştır ki her seferinde farklı denesin
-    random.shuffle(proxy_list)
     
-    # Maksimum 20 proxy denesin, olmazsa pes etsin
-    max_attempts = 20
-    
-    print(f"TEFAS verisi için Proxy ile bağlanılıyor... ({date_str})")
-    
-    for i, proxy_url in enumerate(proxy_list[:max_attempts]):
-        try:
-            print(f"Deneme {i+1}/{max_attempts} -> Proxy: {proxy_url}")
+    try:
+        response = requests.post(url, json=payload, timeout=20)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if not data or 'data' not in data:
+            print("TradingView veri döndürmedi.")
+            return None, None
             
-            # Proxy ayarı
-            proxies = {"http": proxy_url, "https": proxy_url}
+        print(f"Toplam {len(data['data'])} adet fon bulundu.")
+        
+        # Veriyi işle
+        fund_dict = {}
+        for item in data['data']:
+            # item['d'] içinde sırasıyla ["name", "close", "description"] var
+            # name genelde "TEFAS:AFT" şeklinde gelir.
+            symbol_raw = item['d'][0] # Örn: TEFAS:AFT
+            price = item['d'][1]      # Örn: 0.123456
             
-            # İsteği at (impersonate="chrome120" ile tarayıcı taklidi + Proxy)
-            response = requests.post(
-                url, 
-                data=payload, 
-                headers=headers, 
-                impersonate="chrome120",
-                proxies=proxies,
-                timeout=10 # 10 saniye yanıt vermezse diğerine geç
-            )
+            # Fon kodunu ayıkla (TEFAS:AFT -> AFT)
+            code = symbol_raw.split(":")[-1]
             
-            if response.status_code == 200:
-                # Veri geldi mi kontrol et
-                try:
-                    result = response.json()
-                    if 'data' in result and result['data']:
-                        print("BAŞARILI! Veri çekildi.")
-                        
-                        df = pd.DataFrame(result['data'])
-                        df = df[['FONKODU', 'FIYAT']]
-                        
-                        # Fiyat düzeltme
-                        df['FIYAT'] = df['FIYAT'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-                        df['FIYAT'] = pd.to_numeric(df['FIYAT'])
-                        
-                        fund_dict = dict(zip(df['FONKODU'], df['FIYAT']))
-                        return fund_dict, doc_date_str
-                    else:
-                        print("Sunucu yanıt verdi ama veri boş.")
-                except json.JSONDecodeError:
-                    print("JSON hatası, proxy bloklanmış olabilir.")
-            else:
-                print(f"Başarısız kod: {response.status_code}")
+            # Fiyatı sayıya çevir (Zaten sayı geliyor ama garanti olsun)
+            if price is not None:
+                fund_dict[code] = float(price)
                 
-        except Exception as e:
-            # Proxy hatası (timeout vs) normaldir, pas geç
-            pass
-            
-    print("Tüm proxy denemeleri başarısız oldu.")
-    return None, None
+        today = datetime.now()
+        doc_date_str = today.strftime("%Y-%m-%d")
+        
+        return fund_dict, doc_date_str
+
+    except Exception as e:
+        print(f"Hata oluştu: {e}")
+        return None, None
 
 def save_history_to_firebase(fund_data, doc_date):
     if not fund_data:
@@ -127,13 +82,13 @@ def save_history_to_firebase(fund_data, doc_date):
         }
         
         doc_ref.set(data_payload, merge=True)
-        print(f"FIREBASE KAYIT BAŞARILI: '{doc_date}' tarihine {len(fund_data)} adet fon yazıldı.")
+        print(f"BAŞARILI: '{doc_date}' tarihine {len(fund_data)} adet fon kaydedildi.")
         
     except Exception as e:
         print(f"Firebase Hatası: {e}")
 
 if __name__ == "__main__":
-    data, date_id = get_tefas_data_with_proxy()
+    data, date_id = get_data_from_tradingview()
     if data:
         save_history_to_firebase(data, date_id)
     else:
