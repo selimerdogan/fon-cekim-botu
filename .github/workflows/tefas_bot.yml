@@ -1,4 +1,4 @@
-name: Fon Veri Botu (Is Yatirim)
+name: Fon Veri Botu (Bigpara)
 
 on:
   schedule:
@@ -19,9 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # Sadece temel kütüphaneler yeterli
+      # lxml html parsing için gereklidir
       run: |
-        pip install requests pandas firebase-admin
+        pip install curl_cffi pandas firebase-admin lxml html5lib
 
     - name: Scripti Çalıştır
       env:
