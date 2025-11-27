@@ -19,9 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # lxml html parsing için gereklidir
+      # EKLENDI: beautifulsoup4
       run: |
-        pip install curl_cffi pandas firebase-admin lxml html5lib
+        pip install curl_cffi pandas firebase-admin lxml html5lib beautifulsoup4
 
     - name: Scripti Çalıştır
       env:
