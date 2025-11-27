@@ -1,4 +1,4 @@
-name: Fon Veri Botu (Bigpara)
+name: Fon Veri Botu (Selenium + Bigpara)
 
 on:
   schedule:
@@ -19,9 +19,9 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # EKLENDI: beautifulsoup4
+      # Hepsi bir arada tam liste
       run: |
-        pip install curl_cffi pandas firebase-admin lxml html5lib beautifulsoup4
+        pip install selenium webdriver-manager pandas firebase-admin lxml html5lib beautifulsoup4
 
     - name: Scripti Çalıştır
       env:
