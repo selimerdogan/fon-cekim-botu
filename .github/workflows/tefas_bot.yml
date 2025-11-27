@@ -2,7 +2,6 @@ name: Tefas Tarihsel Veri Botu
 
 on:
   schedule:
-    # Hafta içi her gün UTC 18:00 (TR Saati 21:00)
     - cron: '0 18 * * 1-5'
   workflow_dispatch:
 
@@ -17,12 +16,12 @@ jobs:
     - name: Python Kurulumu
       uses: actions/setup-python@v4
       with:
-        # DÜZELTME: Python 3.9 yerine 3.11 kullanıyoruz (Hata çözümü)
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
+      # BURASI KRİTİK: curl_cffi ekli olmalı
       run: |
-        pip install requests pandas firebase-admin
+        pip install curl_cffi pandas firebase-admin
 
     - name: Scripti Çalıştır
       env:
