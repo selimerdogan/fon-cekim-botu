@@ -19,9 +19,8 @@ jobs:
         python-version: '3.11'
 
     - name: Kütüphaneleri Yükle
-      # Selenium ve webdriver-manager ekledik
       run: |
-        pip install selenium webdriver-manager pandas firebase-admin
+        pip install selenium webdriver-manager pandas firebase-admin requests
 
     - name: Scripti Çalıştır
       env:
