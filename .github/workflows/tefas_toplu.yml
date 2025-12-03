@@ -1,14 +1,14 @@
-name: Tek Fon Takip (Hafta İçi 11:00)
+name: Toplu Fon Takip (Hafta İçi 11:00)
 
 on:
   schedule:
-    # Türkiye Saati 11:00 = UTC 08:00
+    # Türkiye 11:00 = UTC 08:00
     - cron: '0 8 * * 1-5'
   
   workflow_dispatch:
 
 jobs:
-  run-fund-bot:
+  run-bulk-bot:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,10 +22,11 @@ jobs:
 
       - name: Kütüphaneleri Yükle
         run: |
-          pip install requests firebase-admin
+          pip install requests pandas firebase-admin
 
       - name: Botu Çalıştır
         env:
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: |
-          python tek_fon_bot.py
+          # Python dosyasının adı neyse onu yaz
+          python tefas_bulk_bot.py
