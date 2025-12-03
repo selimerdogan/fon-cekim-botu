@@ -30,13 +30,58 @@ else:
         print("HATA: Firebase anahtarı bulunamadı.")
         sys.exit(1)
 
-def get_all_funds_data():
-    """Tüm fonları çeker ve değişim oranlarını hesaplar"""
-    print("TEFAS'tan tüm veriler çekiliyor...")
+# --- 1. FON KÜNYE BİLGİLERİNİ ÇEKEN YENİ FONKSİYON ---
+def get_fund_metadata():
+    """Fonların Adı, Büyüklüğü ve Kişi Sayısı gibi statik verilerini çeker."""
+    print("Fon kimlik bilgileri (GenelVeriler) çekiliyor...")
+    url = "https://www.tefas.gov.tr/api/DB/GenelVeriler"
+    
+    # Bu veri seti genellikle son iş gününe aittir
+    today = datetime.now()
+    start_date = today - timedelta(days=5) # Garanti olsun diye geriden alıyoruz
+    
+    payload = {
+        "fontip": "YAT",
+        "sfontip": "",
+        "bastarih": start_date.strftime("%d.%m.%Y"),
+        "bittarih": today.strftime("%d.%m.%Y"),
+        "fonkod": ""
+    }
+    
+    headers = {
+        "Content-Type": "application/json;charset=UTF-8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        data = response.json().get('data', [])
+        
+        # Gelen veriyi Fon Kodu anahtarına göre sözlüğe çeviriyoruz
+        # Böylece ana döngüde "MAC" kodunun adını buradan şıp diye bulacağız.
+        metadata_map = {}
+        for item in data:
+            kod = item.get('FONKODU')
+            if kod:
+                metadata_map[kod] = {
+                    'ad': item.get('FONUNADI', ''),
+                    'buyukluk': float(item.get('FONTOPLAMDEGER', 0) or 0),
+                    'kisi_sayisi': int(float(item.get('KISISAYISI', 0) or 0))
+                }
+        print(f"{len(metadata_map)} fon için kimlik bilgisi alındı.")
+        return metadata_map
+        
+    except Exception as e:
+        print(f"Metadata Çekme Hatası: {e}")
+        return {}
+
+# --- 2. FİYAT VE DEĞİŞİM VERİLERİNİ ÇEKEN FONKSİYON ---
+def get_price_history():
+    """Fonların fiyat geçmişini ve günlük değişimini hesaplar."""
+    print("Fiyat geçmişi (BindHistoryInfo) çekiliyor...")
     
     url = "https://www.tefas.gov.tr/api/DB/BindHistoryInfo"
     
-    # Değişim hesabı için son 6 günün verisi (Araya hafta sonu girerse diye)
     today = datetime.now()
     start_date = today - timedelta(days=6)
     
@@ -62,57 +107,56 @@ def get_all_funds_data():
             
         df = pd.DataFrame(data)
         
-        # Tarih düzeltme
         if 'TARIH' in df.columns:
             df['tarih_dt'] = pd.to_datetime(pd.to_numeric(df['TARIH']), unit='ms')
         
-        # Sıralama ve Değişim Hesabı
         df = df.sort_values(by=['FONKODU', 'tarih_dt'])
         df['onceki_fiyat'] = df.groupby('FONKODU')['FIYAT'].shift(1)
         df['gunluk_degisim'] = ((df['FIYAT'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
         df['gunluk_degisim'] = df['gunluk_degisim'].fillna(0.0)
         
-        # Her fonun sadece EN SON (Güncel) verisini al
+        # Sadece son günü al
         df_latest = df.groupby('FONKODU').tail(1).copy()
-        
         return df_latest
         
     except Exception as e:
-        print(f"Veri Çekme Hatası: {e}")
+        print(f"Fiyat Verisi Hatası: {e}")
         return None
 
 def save_bulk_snapshot():
-    # 1. Veriyi Hazırla
-    df = get_all_funds_data()
+    # Adım 1: Künye Bilgilerini Al (Ad, Büyüklük, Kişi)
+    metadata = get_fund_metadata()
+    
+    # Adım 2: Fiyat Hesaplamalarını Al
+    df = get_price_history()
+    
     if df is None:
         sys.exit(1)
         
-    print(f"Toplam {len(df)} adet fon işleniyor...")
+    print(f"Veriler birleştiriliyor... ({len(df)} fon)")
 
-    # 2. DataFrame'i Map yapısına çevir (İstediğin yeni alanlarla)
+    # Adım 3: İki veriyi birleştir ve Map oluştur
     fon_map = {}
     records = df.to_dict(orient='records')
     
     for item in records:
         fon_kodu = item['FONKODU']
         
-        # Güvenli Veri Çekme (None veya boş gelirse 0 yap)
-        kisi_sayisi_raw = item.get('KISISAYISI')
-        buyukluk_raw = item.get('FONTOPLAMDEGER')
-
+        # Metadata sözlüğünden bu fonun detaylarını bul
+        # Eğer metadata'da yoksa (yeni fon vb.) varsayılan boş değerler kullan
+        detay = metadata.get(fon_kodu, {'ad': '', 'buyukluk': 0, 'kisi_sayisi': 0})
+        
         fon_map[fon_kodu] = {
             'fiyat': float(item.get('FIYAT', 0)),
             'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
             
-            # --- YENİ EKLENEN ALANLAR ---
-            'ad': item.get('FONUNADI', ''),
-            # Kişi sayısı float gelebilir, int'e çeviriyoruz
-            'kisi_sayisi': int(float(kisi_sayisi_raw)) if kisi_sayisi_raw else 0,
-            # Fon büyüklüğü
-            'buyukluk': float(buyukluk_raw) if buyukluk_raw else 0.0
+            # Metadata'dan gelen veriler buraya işleniyor
+            'ad': detay['ad'],
+            'buyukluk': detay['buyukluk'],
+            'kisi_sayisi': detay['kisi_sayisi']
         }
 
-    # 3. Firestore'a Yaz
+    # Adım 4: Firestore'a Yaz
     now = datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M")
@@ -120,14 +164,12 @@ def save_bulk_snapshot():
     print(f"Yazılıyor: fonlar/{date_str}/snapshots/{time_str}")
     
     try:
-        # Tarih dökümanını oluştur
         db.collection('fonlar').document(date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
         
-        # Saat dökümanına tüm haritayı bas
         target_ref = db.collection('fonlar').document(date_str).collection('snapshots').document(time_str)
         target_ref.set(fon_map)
         
-        print(f"✅ BAŞARILI! {len(fon_map)} fon (Ad, Büyüklük, Kişi Sayısı ile) kaydedildi.")
+        print(f"✅ BAŞARILI! {len(fon_map)} fon (Tam Detaylı) kaydedildi.")
         
     except Exception as e:
         print(f"🔥 Yazma Hatası: {e}")
