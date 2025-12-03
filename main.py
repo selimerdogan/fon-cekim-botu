@@ -50,13 +50,9 @@ def get_fintables_funds():
         url = "https://fintables.com/fonlar/getiri"
         print("Fintables'a gidiliyor...")
         driver.get(url)
-        time.sleep(8)
+        time.sleep(5)
         
-        # Sayfa sonuna in (Footer çakışmasını önle)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1)
-
-        # Çerez kapat
+        # Çerezleri Temizle
         try:
             cookie_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Kabul') or contains(text(), 'Tamam')]")
             if cookie_btns:
@@ -65,110 +61,115 @@ def get_fintables_funds():
         except:
             pass
 
-        # İLK SAYFAYI AL
+        # İLK VERİYİ AL
         html = driver.page_source
         tables = pd.read_html(StringIO(html))
         current_df = tables[0]
         
-        # Veri temizliği
+        # Temizlik
         if isinstance(current_df.columns, pd.MultiIndex):
             current_df.columns = [str(col[-1]).strip() for col in current_df.columns]
         else:
             current_df.columns = [str(col).strip() for col in current_df.columns]
         current_df = current_df.astype(str)
-        
         all_dataframes.append(current_df)
-        print(f"Sayfa 1 Alındı. ({len(current_df)} satır)")
+        print(f"Sayfa 1: {len(current_df)} satır alındı.")
 
-        # DÖNGÜ BAŞLIYOR
         page_num = 1
-        max_pages = 70 # Güvenlik limiti
+        max_pages = 60 
         
         while page_num < max_pages:
-            # Kontrol Noktası: Şu anki tablonun ilk satırındaki ilk veriyi al (Örn: "AAK")
-            # Bir sonraki sayfaya geçtiğimizde bu verinin değişmesi lazım.
-            last_first_val = current_df.iloc[0, 0] if not current_df.empty else "YOK"
-            last_second_val = current_df.iloc[0, 1] if not current_df.empty and len(current_df.columns) > 1 else "YOK"
-            
-            # --- TIKLAMA MANTIĞI ---
-            clicked = False
             try:
                 # Sayfanın en altına in
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
 
-                # 1. Yöntem: Pagination içindeki "Sonraki" oku (> veya ikon)
-                # Genelde pagination listesinin son elemanı veya sondan bir önceki elemandır.
-                next_buttons = driver.find_elements(By.CSS_SELECTOR, "ul.pagination li:last-child a, ul.pagination li:last-child button")
+                # --- NAVİGASYON AVCISI ---
+                # Sayfadaki tüm listeleri (ul) ve nav'ları tara.
+                # İçinde en çok "li" (liste elemanı) olan yapı, sayfalama barıdır.
                 
-                # Eğer spesifik yapı bulunamazsa genel arama:
-                if not next_buttons:
-                    next_buttons = driver.find_elements(By.XPATH, "//button[contains(@class, 'next')] | //li[contains(@class, 'next')]//a")
+                potential_navs = driver.find_elements(By.CSS_SELECTOR, "ul, nav, div[class*='pagination']")
+                target_button = None
+                
+                best_nav = None
+                max_items = 0
+                
+                # En kalabalık listeyi bul (Pagination genelde en çok elemana sahip listedir: 1,2,3,4,5...)
+                for nav in potential_navs:
+                    items = nav.find_elements(By.CSS_SELECTOR, "li, button, a")
+                    # En az 3 elemanı olsun (Geri, 1, İleri gibi)
+                    if len(items) > 3:
+                        if len(items) > max_items:
+                            max_items = len(items)
+                            best_nav = items
 
-                if next_buttons:
-                    btn = next_buttons[0]
-                    # Görünürlük kontrolü yapmadan JS ile zorla tıkla
-                    driver.execute_script("arguments[0].click();", btn)
-                    clicked = True
+                if best_nav:
+                    # Listenin SON elemanı genelde "İleri" butonudur.
+                    last_item = best_nav[-1]
+                    
+                    # Eğer son eleman disabled ise (son sayfadaysak) çık
+                    if "disabled" in last_item.get_attribute("class") or last_item.get_attribute("disabled"):
+                        print("Son sayfaya gelindi (Buton pasif).")
+                        break
+                        
+                    target_button = last_item
                 
+                # --- ALTERNATİF: SVG İKON ARA ---
+                if not target_button:
+                     # Sayfanın en altındaki sağa bakan ok ikonunu bul
+                     # Bu çok güçlü bir yöntemdir.
+                     svgs = driver.find_elements(By.CSS_SELECTOR, "button svg")
+                     if svgs:
+                         target_button = svgs[-1].find_element(By.XPATH, "./..") # SVG'nin sahibi olan butonu al
+
+                # --- TIKLAMA VE KONTROL ---
+                if target_button:
+                    # Eski veriyi sakla (Değişim kontrolü için)
+                    old_first_val = current_df.iloc[0, 0] if not current_df.empty else "YOK"
+                    
+                    # Tıkla
+                    driver.execute_script("arguments[0].click();", target_button)
+                    
+                    # Verinin değişmesini bekle (Maksimum 10 saniye)
+                    data_changed = False
+                    for i in range(10):
+                        time.sleep(1)
+                        new_html = driver.page_source
+                        new_tables = pd.read_html(StringIO(new_html))
+                        if new_tables:
+                            check_df = new_tables[0]
+                            new_first_val = str(check_df.iloc[0, 0])
+                            
+                            if new_first_val != str(old_first_val):
+                                # Veri değişti! Yeni sayfadayız.
+                                if isinstance(check_df.columns, pd.MultiIndex):
+                                    check_df.columns = [str(col[-1]).strip() for col in check_df.columns]
+                                else:
+                                    check_df.columns = [str(col).strip() for col in check_df.columns]
+                                check_df = check_df.astype(str)
+                                
+                                current_df = check_df
+                                all_dataframes.append(current_df)
+                                page_num += 1
+                                print(f"Sayfa {page_num}: {len(current_df)} satır alındı. (Toplam: {sum(len(d) for d in all_dataframes)})")
+                                data_changed = True
+                                break
+                    
+                    if not data_changed:
+                        print("Butona tıklandı ama veri değişmedi. Döngü bitiyor.")
+                        break
+                else:
+                    print("Sonraki sayfa butonu bulunamadı.")
+                    break
+
             except Exception as e:
-                print(f"Tıklama hatası: {e}")
-            
-            if not clicked:
-                print("Sonraki buton bulunamadı, işlem bitiriliyor.")
-                break
-
-            # --- VERİ DEĞİŞİM KONTROLÜ (Wait Loop) ---
-            print(f"Sayfa {page_num+1} için tıklandı, veri değişimi bekleniyor...")
-            
-            data_changed = False
-            for attempt in range(10): # 10 saniye boyunca dene
-                time.sleep(1)
-                
-                try:
-                    new_html = driver.page_source
-                    new_tables = pd.read_html(StringIO(new_html))
-                    if new_tables:
-                        check_df = new_tables[0]
-                        
-                        # Yeni tablonun ilk verisi eskisiyle farklı mı?
-                        # Bazen sadece 1. sütun sıra nosudur (1), 2. sütun kod (AAK) olur. İkisini de kontrol et.
-                        new_first_val = str(check_df.iloc[0, 0])
-                        new_second_val = str(check_df.iloc[0, 1]) if len(check_df.columns) > 1 else "YOK"
-                        
-                        # Eğer veri değiştiyse (Eşit değilse)
-                        if str(last_first_val) != new_first_val or str(last_second_val) != new_second_val:
-                            # Harika! Yeni sayfa yüklenmiş.
-                            
-                            # Temizliği yap ve kaydet
-                            if isinstance(check_df.columns, pd.MultiIndex):
-                                check_df.columns = [str(col[-1]).strip() for col in check_df.columns]
-                            else:
-                                check_df.columns = [str(col).strip() for col in check_df.columns]
-                            check_df = check_df.astype(str)
-                            
-                            current_df = check_df # Referansı güncelle
-                            all_dataframes.append(current_df)
-                            data_changed = True
-                            page_num += 1
-                            print(f"BAŞARILI: Sayfa {page_num} verisi alındı. (İlk veri: {new_second_val})")
-                            break
-                except:
-                    continue
-            
-            if not data_changed:
-                print("DİKKAT: Butona tıklandı ama veri değişmedi. Sayfa sonuna gelinmiş olabilir.")
+                print(f"Hata oluştu: {e}")
                 break
 
         # BİRLEŞTİRME
         if all_dataframes:
-            print("Tablolar birleştiriliyor...")
             final_df = pd.concat(all_dataframes, ignore_index=True)
-            
-            print(f"Duplicate öncesi satır sayısı: {len(final_df)}")
             final_df = final_df.drop_duplicates()
-            print(f"Duplicate sonrası satır sayısı: {len(final_df)}")
-            
             return final_df
         else:
             return None
