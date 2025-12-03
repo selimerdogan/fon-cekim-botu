@@ -4,8 +4,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.chrome import ChromeDriverManager
 from io import StringIO
 import firebase_admin
@@ -50,134 +50,145 @@ def get_fintables_funds():
         url = "https://fintables.com/fonlar/getiri"
         print("Fintables'a gidiliyor...")
         driver.get(url)
-        time.sleep(8) # İyice yüklensin
+        time.sleep(8)
+
+        # Klavye ile sayfa sonuna git (Yüklenmeyen elemanları tetikler)
+        ActionChains(driver).send_keys(Keys.END).perform()
+        time.sleep(2)
 
         # 1. Çerezleri Kapat
         try:
-            cookie_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Kabul') or contains(text(), 'Tamam')]")
-            driver.execute_script("arguments[0].click();", cookie_btn)
-            time.sleep(1)
+            cookie_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Kabul') or contains(text(), 'Tamam')]")
+            if cookie_btns:
+                driver.execute_script("arguments[0].click();", cookie_btns[0])
+                time.sleep(1)
         except:
             pass
 
-        # 2. STRATEJİ: 'TÜMÜ' SEÇENEĞİNİ BUL VE TIKLA (En Temiz Yöntem)
-        print("Sayfalama Menüsü Aranıyor...")
+        # 2. STRATEJİ: MODERN DROPDOWN AVCI (Select etiketi olmayanlar için)
+        print("Gelişmiş Dropdown Araması yapılıyor...")
         try:
-            # Sayfanın en altına in
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
+            # İçinde '20', '50' veya '100' yazan küçük tıklanabilir alanları bul
+            # Bu genellikle "Sayfada 20 kayıt göster" kutusudur.
+            candidates = driver.find_elements(By.XPATH, "//*[text()='20' or text()='50' or text()='100']")
             
-            # Sayfada '10', '20', '50' gibi sayıların yazdığı açılır kutuları bulmaya çalış
-            # Bu genellikle tablonun altında "Gösterilecek Kayıt" kutusudur.
-            potential_dropdowns = driver.find_elements(By.XPATH, "//*[contains(text(), '10') or contains(text(), '20') or contains(text(), '50')]")
+            dropdown_success = False
+            for cand in candidates:
+                # Ebeveyn elementine bak (Genelde sayı bir div içindedir)
+                parent = cand.find_element(By.XPATH, "./..")
+                if parent.is_displayed():
+                    driver.execute_script("arguments[0].click();", parent)
+                    time.sleep(1)
+                    
+                    # Tıkladıktan sonra 'Tümü' çıktı mı?
+                    all_opts = driver.find_elements(By.XPATH, "//*[text()='Tümü' or text()='Hepsi' or text()='All']")
+                    for opt in all_opts:
+                        if opt.is_displayed():
+                            driver.execute_script("arguments[0].click();", opt)
+                            print("MÜKEMMEL: Dropdown 'Tümü' seçeneği bulundu!")
+                            dropdown_success = True
+                            time.sleep(10) # Veri yüklenmesi için bekle
+                            break
+                if dropdown_success: break
             
-            dropdown_clicked = False
-            for elem in potential_dropdowns:
-                # Sadece tıklanabilir küçük elemanları dene (Tüm sayfa gövdesini değil)
-                if elem.is_displayed() and elem.size['width'] < 200 and elem.size['height'] < 100:
-                    try:
-                        # Bu bir dropdown olabilir, tıkla!
-                        driver.execute_script("arguments[0].click();", elem)
-                        time.sleep(1)
-                        
-                        # Tıkladıktan sonra 'Tümü' veya 'All' seçeneği çıktı mı?
-                        all_option = driver.find_elements(By.XPATH, "//*[contains(text(), 'Tümü') or contains(text(), 'Hepsi') or contains(text(), 'All')]")
-                        if all_option:
-                            for opt in all_option:
-                                if opt.is_displayed():
-                                    driver.execute_script("arguments[0].click();", opt)
-                                    print("MÜKEMMEL: 'Tümü' seçeneği bulundu ve tıklandı!")
-                                    dropdown_clicked = True
-                                    time.sleep(10) # Verilerin yüklenmesini bekle
-                                    break
-                        if dropdown_clicked: break
-                    except:
-                        continue
-            
-            if not dropdown_clicked:
-                print("Dropdown stratejisi işe yaramadı, sayfa sayfa gezme moduna geçiliyor.")
-        
+            if not dropdown_success:
+                print("Dropdown bulunamadı, sayfa gezme moduna geçiliyor.")
         except Exception as e:
             print(f"Dropdown hatası: {e}")
 
-        # 3. STRATEJİ: SAYFA NUMARALARINI GEZ (Yedek Plan)
-        # Eğer yukarıdaki çalışmadıysa burası devreye girer
+        # 3. STRATEJİ: SAYFA SAYFA GEZME (İkon Tıklama Modu)
         
-        page_num = 1
-        while True:
-            # Mevcut sayfayı kaydet
-            html = driver.page_source
-            tables = pd.read_html(StringIO(html))
-            if tables:
-                df = tables[0]
-                # Başlık Temizliği
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [str(col[-1]).strip() for col in df.columns]
-                else:
-                    df.columns = [str(col).strip() for col in df.columns]
-                df = df.astype(str)
-                all_dataframes.append(df)
-                print(f"Sayfa {page_num} tarandı. (Satır sayısı: {len(df)})")
-            
-            # Sonraki sayfaya geç
+        # İlk sayfayı al
+        html = driver.page_source
+        tables = pd.read_html(StringIO(html))
+        if tables:
+            df = tables[0]
+            # Başlık Temizliği
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [str(col[-1]).strip() for col in df.columns]
+            else:
+                df.columns = [str(col).strip() for col in df.columns]
+            df = df.astype(str)
+            all_dataframes.append(df)
+            print(f"Başlangıç: {len(df)} veri alındı.")
+
+        page_count = 1
+        while page_count < 60: # Max 60 sayfa (Güvenlik)
             try:
-                # Sayfanın altına in
+                # Sayfanın en altına in
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
 
-                # Sıradaki numarayı bul (Örn: şu an 1 ise, "2" yazan butonu bul)
-                next_page = page_num + 1
+                # "SONRAKİ" BUTONUNU BULMA SANATI
+                # Metin araması yerine, Pagination barın SON butonunu hedefliyoruz.
+                # Genelde yapı şöyledir: [1] [2] [3] [...] [>]
                 
-                # Çok geniş bir XPath kullanıyoruz: Text içeriği TAM OLARAK sayıya eşit olan herhangi bir element
-                # Hem '2' hem ' 2 ' boşluklu olabilir.
-                xpath = f"//li[contains(., '{next_page}')] | //button[contains(., '{next_page}')] | //a[contains(text(), '{next_page}')]"
+                # Tüm butonları bul
+                # class'ında 'pagination', 'page', 'next' geçen containerları bul
+                next_btn = None
                 
-                buttons = driver.find_elements(By.XPATH, xpath)
+                # Yöntem A: Pagination içindeki son butona tıkla
+                paginations = driver.find_elements(By.CSS_SELECTOR, "ul[class*='pagination'], div[class*='pagination'], nav[class*='pagination']")
+                
                 clicked = False
+                if paginations:
+                    # Pagination içindeki tüm tıklanabilirleri al (li, button, a)
+                    items = paginations[0].find_elements(By.CSS_SELECTOR, "li, button, a")
+                    if items:
+                        # En sondaki eleman genelde "İleri" butonudur
+                        last_item = items[-1]
+                        # Eğer bu buton 'disabled' değilse tıkla
+                        if "disabled" not in last_item.get_attribute("class"):
+                             driver.execute_script("arguments[0].click();", last_item)
+                             clicked = True
                 
-                # Bulunan butonlardan tıklanabilir olanı seç
-                for btn in buttons:
-                    # Sayı metni içeriyor mu kontrol et (Gereksiz textleri elemek için)
-                    if str(next_page) in btn.text and len(btn.text) < 5: 
-                         # Görünür olmasa bile JS ile tıkla
-                         driver.execute_script("arguments[0].click();", btn)
-                         time.sleep(3)
-                         clicked = True
-                         page_num += 1
-                         break
-                
+                # Yöntem B: Eğer Pagination container bulunamadıysa, SVG ikonlu butonları dene
                 if not clicked:
-                    # Numarayı bulamadıysak "İleri" okunu deneyelim (SVG ikonlu butonlar)
-                    # Genelde "last-child" olan buton "İleri" butonudur.
-                    # Pagination div'ini bulup son butonuna tıklayalım
-                    try:
-                        pagination_divs = driver.find_elements(By.CSS_SELECTOR, "[class*='pagination']")
-                        if pagination_divs:
-                            buttons_in_pag = pagination_divs[0].find_elements(By.TAG_NAME, "button")
-                            if buttons_in_pag:
-                                last_btn = buttons_in_pag[-1]
-                                driver.execute_script("arguments[0].click();", last_btn)
-                                time.sleep(3)
-                                page_num += 1
-                                clicked = True
-                    except:
-                        pass
-                
-                if not clicked:
-                    print(f"Sayfa {next_page} için buton bulunamadı. Tarama bitiyor.")
-                    break
+                    # İçinde SVG (ikon) olan tüm butonları bul (Genelde ok işaretidir)
+                    svg_buttons = driver.find_elements(By.CSS_SELECTOR, "button svg, a svg")
+                    if svg_buttons:
+                        # Sayfanın en altındaki svg butonu muhtemelen "ileri"dir
+                        parent_btn = svg_buttons[-1].find_element(By.XPATH, "./..")
+                        driver.execute_script("arguments[0].click();", parent_btn)
+                        clicked = True
+
+                if clicked:
+                    time.sleep(3) # Yeni sayfanın yüklenmesini bekle
                     
-                if page_num > 50: # Güvenlik
+                    # Yeni veriyi oku
+                    html = driver.page_source
+                    new_tables = pd.read_html(StringIO(html))
+                    if new_tables:
+                        new_df = new_tables[0]
+                        # Temizlik
+                        if isinstance(new_df.columns, pd.MultiIndex):
+                            new_df.columns = [str(col[-1]).strip() for col in new_df.columns]
+                        else:
+                            new_df.columns = [str(col).strip() for col in new_df.columns]
+                        new_df = new_df.astype(str)
+                        
+                        all_dataframes.append(new_df)
+                        print(f"Sayfa {page_count + 1} eklendi. ({len(new_df)} satır)")
+                        page_count += 1
+                    else:
+                        print("Tablo okunamadı, durduruluyor.")
+                        break
+                else:
+                    print("Tıklanacak 'Sonraki' butonu bulunamadı. Son sayfa olabilir.")
                     break
 
             except Exception as e:
                 print(f"Döngü hatası: {e}")
                 break
 
-        # Birleştirme
+        # BİRLEŞTİRME VE TEMİZLİK
         if all_dataframes:
             final_df = pd.concat(all_dataframes, ignore_index=True)
-            final_df = final_df.drop_duplicates() # Mükerrerleri sil
+            
+            # Tekrar eden satırları temizle (Sayfa geçişlerinde bazen overlap olur)
+            # Tüm sütunlara göre duplicate kontrolü
+            final_df = final_df.drop_duplicates()
+            
             return final_df
         else:
             return None
@@ -196,7 +207,7 @@ def upload_to_firestore(df):
     print("-" * 30)
     
     if len(df) < 50:
-         print("UYARI: Hala az fon var. Site yapısı dinamik yükleme yapıyor olabilir.")
+         print("UYARI: Hala az fon var. Site yapısı çok inatçı çıktı.")
 
     target_col = df.columns[0]
     kod_cols = [c for c in df.columns if "Kod" in c or "Code" in c]
