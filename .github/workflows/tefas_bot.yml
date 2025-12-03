@@ -2,7 +2,7 @@ name: Fonları Firebase'e Yükle
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Her gün sabah 09:00 (UTC+3)
+    - cron: '0 6 * * *' # Her gün sabah 09:00
   workflow_dispatch:
 
 jobs:
@@ -13,18 +13,16 @@ jobs:
       - name: Repoyu Çek
         uses: actions/checkout@v4
 
-      - name: Python Kurulumu
+      - name: Python Kurulumu (3.11 Güncel Sürüm)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11' 
 
       - name: Kütüphaneleri Yükle
         run: pip install -r requirements.txt
 
-      # BURASI ÖNEMLİ: Secret'ı JSON dosyasına çeviriyoruz
-      - name: Firebase Key Oluştur
-        run: |
-          echo '${{ secrets.FIREBASE_CREDENTIALS }}' > serviceAccountKey.json
-
       - name: Scripti Çalıştır
+        env:
+          # Secret'ı burada ortam değişkeni olarak veriyoruz
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: python main.py
