@@ -53,55 +53,41 @@ def get_fintables_funds():
 
         # --- 1. ADIM: ÇEREZ UYARISINI KAPAT ---
         try:
-            # Yaygın çerez butonu metinleri
             cookie_buttons = driver.find_elements(By.XPATH, "//button[contains(text(), 'Kabul Et') or contains(text(), 'Tamam') or contains(text(), 'Anladım')]")
             if cookie_buttons:
-                print("Çerez uyarısı bulundu, kapatılıyor...")
+                print("Çerez uyarısı kapatılıyor...")
                 driver.execute_script("arguments[0].click();", cookie_buttons[0])
                 time.sleep(2)
         except:
-            pass # Çerez yoksa devam et
+            pass
 
         # --- 2. ADIM: SAYFAYI GENİŞLET (TÜMÜNÜ GÖSTER) ---
         print("Tablo genişletilmeye çalışılıyor...")
         try:
-            # Sayfanın en altına in
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
 
-            # Sayfadaki tüm 'select' (açılır kutu) elementlerini bul
-            # Genelde sayfanın altında "Sayfada X kayıt göster" diye bir select olur
             selects = driver.find_elements(By.TAG_NAME, "select")
-            
             paginator_found = False
+            
             for select_element in selects:
-                # Bu kutunun içindeki seçeneklere bak
                 options = select_element.find_elements(By.TAG_NAME, "option")
                 if len(options) > 0:
-                    # Seçeneklerin değerlerini yazdıralım (Debug için)
                     option_texts = [opt.text for opt in options]
-                    print(f"Bulunan Dropdown Seçenekleri: {option_texts}")
+                    print(f"Dropdown bulundu: {option_texts}")
                     
-                    # Eğer içinde 'Tümü', 'All' veya '100'den büyük bir sayı varsa bu doğru kutudur
-                    # Strateji: En son seçeneği (Genelde en büyük sayıdır) seç.
-                    last_option = options[-1]
-                    print(f"Seçilen Opsiyon: {last_option.text}")
-                    
-                    # Görünür olmasa bile JS ile tıkla
-                    # Önce select'i görünür yap (bazen css gizler)
+                    # En son seçeneği (Genelde 'Tümü' veya en büyük sayı) seç
                     driver.execute_script("arguments[0].style.display = 'block';", select_element)
-                    
-                    # Seçimi yap
                     select_object = Select(select_element)
-                    select_object.select_by_index(len(options) - 1) # Sonuncuyu seç
+                    select_object.select_by_index(len(options) - 1)
                     
                     paginator_found = True
                     print("En geniş görünüm seçildi. Tablo güncelleniyor...")
-                    time.sleep(10) # Tablonun yeniden dolması için uzun bekle
+                    time.sleep(10)
                     break
             
             if not paginator_found:
-                print("UYARI: Sayfalama kutusu (Select) bulunamadı. Sadece ilk sayfa çekilecek.")
+                print("UYARI: Sayfalama kutusu (Select) bulunamadı.")
 
         except Exception as e:
             print(f"Genişletme Hatası: {e}")
@@ -113,8 +99,6 @@ def get_fintables_funds():
         
         if tables:
             df = tables[0]
-            
-            # Başlık düzeltme
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [str(col[-1]).strip() for col in df.columns]
             else:
@@ -138,11 +122,6 @@ def upload_to_firestore(df):
     print(f"TOPLAM ÇEKİLEN FON SAYISI: {len(df)}")
     print("-" * 30)
     
-    # 27'den fazlaysa başardık demektir
-    if len(df) < 50:
-        print("UYARI: Hala az sayıda fon var. Dropdown seçimi işe yaramamış olabilir.")
-
-    # Otomatik sütun bulma
     target_col = df.columns[0]
     kod_cols = [c for c in df.columns if "Kod" in c or "Code" in c]
     if kod_cols:
@@ -157,4 +136,29 @@ def upload_to_firestore(df):
     for item in records:
         raw_code = item.get(target_col)
         
-        if raw
+        # HATA ALINAN SATIR BURASIYDI - DÜZELTİLDİ
+        if raw_code and str(raw_code).lower() not in ['nan', 'none', '']:
+            fon_kodu = str(raw_code).strip().replace('/', '-')
+            
+            doc_ref = db.collection(collection_name).document(fon_kodu)
+            item['guncellenme_tarihi'] = firestore.SERVER_TIMESTAMP
+            
+            batch.set(doc_ref, item)
+            count += 1
+            
+            if count % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+                print(f"{count} fon işlendi...")
+
+    batch.commit()
+    print(f"BAŞARILI: Toplam {count} fon Firebase'e yüklendi!")
+
+if __name__ == "__main__":
+    df_funds = get_fintables_funds()
+    
+    if df_funds is not None:
+        upload_to_firestore(df_funds)
+    else:
+        print("HATA: Veri boş geldi.")
+        exit(1)
