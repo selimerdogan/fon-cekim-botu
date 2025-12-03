@@ -36,7 +36,7 @@ def get_all_funds_data():
     
     url = "https://www.tefas.gov.tr/api/DB/BindHistoryInfo"
     
-    # Değişim hesabı için son 5-6 günün verisi lazım
+    # Değişim hesabı için son 6 günün verisi (Araya hafta sonu girerse diye)
     today = datetime.now()
     start_date = today - timedelta(days=6)
     
@@ -45,7 +45,7 @@ def get_all_funds_data():
         "sfontip": "",
         "bastarih": start_date.strftime("%d.%m.%Y"),
         "bittarih": today.strftime("%d.%m.%Y"),
-        "fonkod": "" # Boş bırakınca hepsini çeker
+        "fonkod": "" 
     }
     
     headers = {
@@ -89,50 +89,48 @@ def save_bulk_snapshot():
         
     print(f"Toplam {len(df)} adet fon işleniyor...")
 
-    # 2. DataFrame'i senin istediğin Map yapısına çevir
-    # Örnek Yapı:
-    # {
-    #   "TTE": { "price": 45.2, "change": 1.2, "name": "İş Bank..." },
-    #   "MAC": { "price": 120.5, "change": -0.5, "name": "Marmara..." }
-    # }
-    
+    # 2. DataFrame'i Map yapısına çevir (İstediğin yeni alanlarla)
     fon_map = {}
     records = df.to_dict(orient='records')
     
     for item in records:
         fon_kodu = item['FONKODU']
         
-        # İstersen buraya 'name': item['FONUNADI'] ekleyebilirsin 
-        # ama 2000 fon için dosya boyutunu şişirebilir. 
-        # Sadece fiyat ve değişim en temizidir.
+        # Güvenli Veri Çekme (None veya boş gelirse 0 yap)
+        kisi_sayisi_raw = item.get('KISISAYISI')
+        buyukluk_raw = item.get('FONTOPLAMDEGER')
+
         fon_map[fon_kodu] = {
-            'fiyat': float(item['FIYAT']),
-            'degisim': round(float(item['gunluk_degisim']), 2),
-            # 'ad': item['FONUNADI'] # İstersen başındaki # işaretini kaldır
+            'fiyat': float(item.get('FIYAT', 0)),
+            'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
+            
+            # --- YENİ EKLENEN ALANLAR ---
+            'ad': item.get('FONUNADI', ''),
+            # Kişi sayısı float gelebilir, int'e çeviriyoruz
+            'kisi_sayisi': int(float(kisi_sayisi_raw)) if kisi_sayisi_raw else 0,
+            # Fon büyüklüğü
+            'buyukluk': float(buyukluk_raw) if buyukluk_raw else 0.0
         }
 
-    # 3. Firestore'a Tek Seferde Yaz
+    # 3. Firestore'a Yaz
     now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d") # 2025-12-03
-    time_str = now.strftime("%H:%M")    # 11:00
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
 
     print(f"Yazılıyor: fonlar/{date_str}/snapshots/{time_str}")
     
     try:
-        # Tarih dökümanını oluştur (Yoksa)
+        # Tarih dökümanını oluştur
         db.collection('fonlar').document(date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
         
-        # Saat dökümanının içine 2000 fonu gömüyoruz
+        # Saat dökümanına tüm haritayı bas
         target_ref = db.collection('fonlar').document(date_str).collection('snapshots').document(time_str)
-        
-        # DİKKAT: Burası tek dökümana 2000 key yazar.
         target_ref.set(fon_map)
         
-        print(f"✅ BAŞARILI! {len(fon_map)} fon tek listede kaydedildi.")
+        print(f"✅ BAŞARILI! {len(fon_map)} fon (Ad, Büyüklük, Kişi Sayısı ile) kaydedildi.")
         
     except Exception as e:
         print(f"🔥 Yazma Hatası: {e}")
-        # Eğer "Document too large" hatası alırsan fon adını (FONUNADI) veriden çıkarman gerekir.
 
 if __name__ == "__main__":
     save_bulk_snapshot()
