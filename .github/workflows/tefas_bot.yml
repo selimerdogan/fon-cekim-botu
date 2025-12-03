@@ -1,23 +1,16 @@
-name: Günlük Fon Takipçisi
+name: Fonları Firebase'e Yükle
 
 on:
-  push:
-    branches:
-      - main
   schedule:
-    # UTC saatiyle çalışır. Türkiye saati (UTC+3) için sabah 09:00 olsun istiyorsak 06:00 yazarız.
-    - cron: '0 6 * * *' 
-  workflow_dispatch: # "Run workflow" butonu ile manuel çalıştırmak için
-
-permissions:
-  contents: write
+    - cron: '0 6 * * *' # Her gün sabah 09:00 (UTC+3)
+  workflow_dispatch:
 
 jobs:
-  scrape:
+  scrape_and_upload:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repoyu Çek (Checkout)
+      - name: Repoyu Çek
         uses: actions/checkout@v4
 
       - name: Python Kurulumu
@@ -26,17 +19,12 @@ jobs:
           python-version: '3.9'
 
       - name: Kütüphaneleri Yükle
+        run: pip install -r requirements.txt
+
+      # BURASI ÖNEMLİ: Secret'ı JSON dosyasına çeviriyoruz
+      - name: Firebase Key Oluştur
         run: |
-          pip install -r requirements.txt
+          echo '${{ secrets.FIREBASE_CREDENTIALS }}' > serviceAccountKey.json
 
       - name: Scripti Çalıştır
         run: python main.py
-
-      - name: Sonucu Kaydet (Commit & Push)
-        run: |
-          git config --global user.name "GitHub Action Bot"
-          git config --global user.email "actions@github.com"
-          git add guncel_fonlar.xlsx
-          # Eğer değişiklik yoksa hata vermemesi için || echo kullanıyoruz
-          git commit -m "Otomatik Güncelleme: Fon Verileri" || echo "Değişiklik yok"
-          git push
