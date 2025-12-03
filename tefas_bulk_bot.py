@@ -30,7 +30,7 @@ else:
         print("HATA: Firebase anahtarı bulunamadı.")
         sys.exit(1)
 
-# --- HEADER AYARLARI (Senin Kodundan) ---
+# --- SENİN GÖNDERDİĞİN SAĞLAM HEADERLAR ---
 SHARED_HEADERS = {
     "Content-Type": "application/json;charset=UTF-8",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -39,11 +39,8 @@ SHARED_HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-# Oturum yönetimi için Session nesnesi
-session = requests.Session()
-
 def get_fund_metadata():
-    """Fonların ADI, BÜYÜKLÜĞÜ ve KİŞİ SAYISI verilerini çeker (Session Destekli)."""
+    """Fonların ADI, BÜYÜKLÜĞÜ ve KİŞİ SAYISI verilerini çeker."""
     print("Fon kimlik bilgileri (GenelVeriler) çekiliyor...")
     
     url = "https://www.tefas.gov.tr/api/DB/GenelVeriler"
@@ -60,19 +57,7 @@ def get_fund_metadata():
     }
     
     try:
-        # 1. Önce siteye girip COOKIE alıyoruz (GenelVeriler bunu şart koşar)
-        # Bu kısım olmadan JSON hatası alırsın.
-        print("   -> Çerez (Cookie) alınıyor...")
-        session.get("https://www.tefas.gov.tr/FonKarsilastirma.aspx", headers=SHARED_HEADERS)
-        
-        # 2. Şimdi isteği atıyoruz (session.post kullanarak)
-        response = session.post(url, json=payload, headers=SHARED_HEADERS)
-        
-        # Yanıt kontrolü
-        if response.status_code != 200:
-             print(f"HATA: API {response.status_code} döndü.")
-             return {}
-
+        response = requests.post(url, json=payload, headers=SHARED_HEADERS)
         data = response.json().get('data', [])
         
         metadata_map = {}
@@ -89,7 +74,6 @@ def get_fund_metadata():
         
     except Exception as e:
         print(f"Metadata Hatası: {e}")
-        # Hata olsa bile kod durmasın, boş sözlük dönsün
         return {}
 
 def get_price_history():
@@ -110,9 +94,7 @@ def get_price_history():
     }
     
     try:
-        # Fiyat servisi nazlı değildir, direkt requests ile de çalışır
-        # ama session ile gitmek daha güvenlidir.
-        response = session.post(url, json=payload, headers=SHARED_HEADERS)
+        response = requests.post(url, json=payload, headers=SHARED_HEADERS)
         data = response.json().get('data', [])
         
         if not data:
@@ -123,11 +105,13 @@ def get_price_history():
         if 'TARIH' in df.columns:
             df['tarih_dt'] = pd.to_datetime(pd.to_numeric(df['TARIH']), unit='ms')
         
+        # Değişim hesabı
         df = df.sort_values(by=['FONKODU', 'tarih_dt'])
         df['onceki_fiyat'] = df.groupby('FONKODU')['FIYAT'].shift(1)
         df['gunluk_degisim'] = ((df['FIYAT'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
         df['gunluk_degisim'] = df['gunluk_degisim'].fillna(0.0)
         
+        # En son veriyi al
         df_latest = df.groupby('FONKODU').tail(1).copy()
         return df_latest
         
@@ -136,29 +120,29 @@ def get_price_history():
         return None
 
 def save_bulk_snapshot():
-    # 1. Metadata (İsim, Büyüklük...)
+    # 1. Metadata Al
     metadata = get_fund_metadata()
     
-    # 2. Fiyatlar
+    # 2. Fiyatları Al
     df = get_price_history()
     
     if df is None:
-        print("❌ Kritik Hata: Fiyat verisi çekilemedi.")
+        print("❌ Fiyat verisi alınamadı.")
         sys.exit(1)
         
     print(f"Veriler birleştiriliyor... ({len(df)} fon)")
 
-    # 3. Birleştirme (Merging)
+    # 3. Hepsini Tek Bir Map Yapısında Birleştir
     fon_map = {}
     records = df.to_dict(orient='records')
     
     for item in records:
         fon_kodu = item['FONKODU']
         
-        # Metadata'dan al, yoksa boş değerler
+        # Metadata'dan detayları çek
         detay = metadata.get(fon_kodu, {'ad': '', 'buyukluk': 0, 'kisi_sayisi': 0})
         
-        # İsim yedeği
+        # İsim yedeği (Metadata boşsa API'den gelene bak)
         fon_adi = detay['ad']
         if not fon_adi and item.get('FONUNADI'):
             fon_adi = item.get('FONUNADI')
@@ -171,20 +155,22 @@ def save_bulk_snapshot():
             'kisi_sayisi': detay['kisi_sayisi']
         }
 
-    # 4. Yazma
+    # 4. Firestore'a Yaz (Snapshot Yapısı)
     now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M")
+    date_str = now.strftime("%Y-%m-%d") # 2025-12-03
+    time_str = now.strftime("%H:%M")    # 11:00
 
     print(f"Firebase'e yazılıyor: fonlar/{date_str}/snapshots/{time_str}")
     
     try:
+        # Tarih Dökümanı
         db.collection('fonlar').document(date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
         
+        # Saat Dökümanı (Tek Map)
         target_ref = db.collection('fonlar').document(date_str).collection('snapshots').document(time_str)
         target_ref.set(fon_map)
         
-        print(f"✅ BAŞARILI! {len(fon_map)} fon (Tam Detaylı) kaydedildi.")
+        print(f"✅ BAŞARILI! {len(fon_map)} fon verisi tek listede kaydedildi.")
         
     except Exception as e:
         print(f"🔥 Yazma Hatası: {e}")
