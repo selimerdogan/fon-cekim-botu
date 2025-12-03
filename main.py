@@ -3,6 +3,9 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from io import StringIO
 import firebase_admin
@@ -45,7 +48,36 @@ def get_fintables_funds():
         url = "https://fintables.com/fonlar/getiri"
         print("Fintables'a gidiliyor...")
         driver.get(url)
-        time.sleep(10)
+        
+        # Sayfanın ilk yüklenmesi için bekle
+        time.sleep(5)
+
+        # --- TÜMÜNÜ GÖSTERME HAMLESİ ---
+        print("Tablo genişletilmeye çalışılıyor...")
+        try:
+            # Sayfanın altına in ki elemanlar yüklensin
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+
+            # Fintables'da genellikle sayfalama kısmında "Tümü" seçeneği olur.
+            # Metin içeriği "Tümü" olan bir tıklanabilir öğe arıyoruz.
+            # Bu genelde bir dropdown içindedir veya direkt butondur.
+            
+            # Yöntem 1: Direkt "Tümü" yazısını içeren bir elemente tıkla
+            tumunu_goster = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Tümü')]"))
+            )
+            tumunu_goster.click()
+            print("'Tümü' butonuna tıklandı, veriler yükleniyor...")
+            
+            # Tıkladıktan sonra tablonun büyümesi için zaman verelim
+            time.sleep(10)
+            
+        except Exception as e:
+            print(f"UYARI: 'Tümü' butonu bulunamadı veya tıklanamadı. Varsayılan tablo çekilecek. Hata: {e}")
+            # B planı: Belki dropdown açmak gerekiyordur, ama şimdilik text araması %90 çalışır.
+
+        # -----------------------------
 
         html = driver.page_source
         tables = pd.read_html(StringIO(html))
@@ -53,18 +85,13 @@ def get_fintables_funds():
         if tables:
             df = tables[0]
             
-            # --- KRİTİK DÜZELTME BAŞLANGIÇ ---
-            # 1. Eğer başlıklar MultiIndex (Tuple) ise düzleştir
+            # MultiIndex düzeltme
             if isinstance(df.columns, pd.MultiIndex):
-                # Sadece son seviyedeki başlığı al (Örn: ('#', 'Kod') -> 'Kod')
                 df.columns = [str(col[-1]).strip() for col in df.columns]
             else:
                 df.columns = [str(col).strip() for col in df.columns]
             
-            # 2. Tüm verileri string'e çevir (Firestore hatasını önler)
             df = df.astype(str)
-            # --- KRİTİK DÜZELTME BİTİŞ ---
-            
             return df
         else:
             return None
@@ -78,42 +105,30 @@ def get_fintables_funds():
 def upload_to_firestore(df):
     collection_name = "fonlar"
     
-    # Tabloyu kontrol edelim
     print("-" * 30)
-    print(f"Düzeltilmiş Sütunlar: {df.columns.tolist()}")
-    print("İlk satır verisi:", df.iloc[0].tolist())
+    print(f"TOPLAM FON SAYISI: {len(df)}") # Burası artık 27 değil 500+ olmalı
     print("-" * 30)
 
-    # FON KODU HANGİ SÜTUNDA?
-    # Genelde 2. sütun (Index 1) kod olur (AAK, AAL...). 
-    # İlk sütun (Index 0) genelde sıra numarasıdır (1, 2, 3...).
-    target_col = df.columns[0] # Varsayılan
-    
-    # Eğer "Kod" isminde bir sütun varsa onu kullan, yoksa mantıksal arama yap
+    # Otomatik sütun bulma
+    target_col = df.columns[0]
     kod_cols = [c for c in df.columns if "Kod" in c or "Code" in c]
     if kod_cols:
         target_col = kod_cols[0]
-        print(f"BULDUM: Fon Kodları '{target_col}' sütunundan alınacak.")
-    else:
-        # İsimle bulamadıysak 2. sütuna bakalım (Genelde kod oradadır)
-        if len(df.columns) > 1:
-            target_col = df.columns[1]
-            print(f"OTOMATİK: İsim bulunamadı, 2. sütun ('{target_col}') kod olarak seçildi.")
+    elif len(df.columns) > 1:
+        target_col = df.columns[1]
 
     records = df.to_dict(orient='records')
     count = 0
     batch = db.batch()
     
+    # Firestore limiti batch başına 500 işlemdir. 
+    # Büyük veri setlerinde bu önemlidir.
+    
     for item in records:
         raw_code = item.get(target_col)
         
-        # Kod geçerli mi kontrol et (Boş değilse ve 3 harfliyse genelde fondur)
         if raw_code and raw_code.lower() not in ['nan', 'none', '']:
-            # "/" işaretini temizle (Firestore ID kuralları)
             fon_kodu = str(raw_code).strip().replace('/', '-')
-            
-            # Gereksiz sayısal index sütununu veritabanına kaydetmeye gerek yok
-            # (Opsiyonel temizlik)
             
             doc_ref = db.collection(collection_name).document(fon_kodu)
             item['guncellenme_tarihi'] = firestore.SERVER_TIMESTAMP
@@ -121,11 +136,13 @@ def upload_to_firestore(df):
             batch.set(doc_ref, item)
             count += 1
             
+            # Her 400 kayıtta bir gönder
             if count % 400 == 0:
                 batch.commit()
                 batch = db.batch()
                 print(f"{count} fon işlendi...")
 
+    # Kalan son grubu gönder
     batch.commit()
     print(f"BAŞARILI: Toplam {count} fon Firebase'e yüklendi!")
 
