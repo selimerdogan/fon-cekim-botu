@@ -6,7 +6,7 @@ on:
     # 1-5: Pazartesi'den Cuma'ya (Hafta İçi)
     - cron: '0 8 * * 1-5'
   
-  # Elle çalıştırmak için
+  # Elle çalıştırmak için buton
   workflow_dispatch:
 
 jobs:
@@ -23,10 +23,13 @@ jobs:
           python-version: '3.11'
 
       - name: Kütüphaneleri Yükle
+        # Pandas eklemeyi unutma, yoksa kod çalışmaz!
         run: |
-          pip install firebase-admin requests
+          pip install firebase-admin requests pandas
 
       - name: Fon Botunu Çalıştır
         env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
-         run: python main.py
+          # DİKKAT: GitHub Secret ismin 'FIREBASE_CREDENTIALS' ise burası da öyle olmalı.
+          # Eğer yeni isim verdiysen (FIREBASE_KEY) GitHub ayarlarında da değiştirmelisin.
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+        run: python main.py
