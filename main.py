@@ -68,9 +68,9 @@ def get_tefas_data_with_change():
                 df = pd.DataFrame(data)
                 
                 # Tarih sütununu düzelt (Unix Timestamp -> Datetime)
-                # TEFAS genelde milisaniye cinsinden epoch gönderir
+                # Düzeltme: Önce sayısal değere çevir, sonra tarihe dönüştür (FutureWarning giderildi)
                 if 'TARIH' in df.columns:
-                    df['tarih_dt'] = pd.to_datetime(df['TARIH'], unit='ms')
+                    df['tarih_dt'] = pd.to_datetime(pd.to_numeric(df['TARIH']), unit='ms')
                 else:
                     print("HATA: Tarih sütunu bulunamadı.")
                     return None
