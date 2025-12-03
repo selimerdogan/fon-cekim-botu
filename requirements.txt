@@ -1,3 +1,5 @@
-requests
+selenium
 pandas
-firebase-admin
+webdriver-manager
+lxml
+openpyxl
