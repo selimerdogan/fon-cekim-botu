@@ -1,5 +1,4 @@
 import requests
-import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
@@ -7,8 +6,11 @@ import os
 from datetime import datetime, timedelta
 import sys
 
+# --- AYARLAR ---
+# Takip edilecek TEK fonun kodu (Burayı değiştirebilirsin)
+SECILEN_FON = "TTE"  # Örnek: TTE, MAC, YAS vb.
+
 # --- FIREBASE BAĞLANTISI ---
-# GitHub Secret'tan gelen anahtarı kullanır
 firebase_creds_str = os.environ.get('FIREBASE_CREDENTIALS')
 
 if firebase_creds_str:
@@ -22,7 +24,7 @@ if firebase_creds_str:
         print(f"Firebase Bağlantı Hatası: {e}")
         sys.exit(1)
 else:
-    # Lokal test için
+    # Lokal test
     if os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
         if not firebase_admin._apps:
@@ -32,21 +34,22 @@ else:
         print("HATA: Firebase anahtarı bulunamadı.")
         sys.exit(1)
 
-def get_tefas_data_with_change():
-    print("TEFAS API'sine bağlanılıyor (Değişim Analizi Modu)...")
+def get_tefas_price(fon_kodu):
+    """Seçilen fonun TEFAS'taki son fiyatını çeker"""
+    print(f"{fon_kodu} için TEFAS verisi çekiliyor...")
     
     url = "https://www.tefas.gov.tr/api/DB/BindHistoryInfo"
     
-    # Son 10 günün verisini alalım (Tatilleri atlamak için geniş tutuyoruz)
+    # Son veriyi yakalamak için son 5 günü istiyoruz
     today = datetime.now()
-    start_date = today - timedelta(days=10)
+    start_date = today - timedelta(days=5)
     
     payload = {
         "fontip": "YAT",
         "sfontip": "",
         "bastarih": start_date.strftime("%d.%m.%Y"),
         "bittarih": today.strftime("%d.%m.%Y"),
-        "fonkod": ""
+        "fonkod": fon_kodu
     }
     
     headers = {
@@ -58,101 +61,64 @@ def get_tefas_data_with_change():
     
     try:
         response = requests.post(url, json=payload, headers=headers)
-        
         if response.status_code == 200:
             result = response.json()
             data = result.get('data', [])
             
             if data:
-                print(f"API'den {len(data)} satır veri çekildi. Analiz başlıyor...")
-                df = pd.DataFrame(data)
-                
-                # Tarih sütununu düzelt (Unix Timestamp -> Datetime)
-                # Düzeltme: Önce sayısal değere çevir, sonra tarihe dönüştür (FutureWarning giderildi)
-                if 'TARIH' in df.columns:
-                    df['tarih_dt'] = pd.to_datetime(pd.to_numeric(df['TARIH']), unit='ms')
-                else:
-                    print("HATA: Tarih sütunu bulunamadı.")
-                    return None
-
-                # Veriyi Fon Kodu ve Tarihe göre sırala
-                df = df.sort_values(by=['FONKODU', 'tarih_dt'])
-                
-                # --- GÜNLÜK DEĞİŞİM HESAPLAMA SİHRİ ---
-                # Her fon grubu içinde 'shift' yaparak bir önceki günün fiyatını yanına getiriyoruz
-                df['onceki_fiyat'] = df.groupby('FONKODU')['FIYAT'].shift(1)
-                
-                # Yüzdelik Değişim Formülü: ((Yeni - Eski) / Eski) * 100
-                df['gunluk_degisim'] = ((df['FIYAT'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
-                
-                # Değişim verisi olmayanları (ilk gün verisi) 0 yap
-                df['gunluk_degisim'] = df['gunluk_degisim'].fillna(0.0)
-                
-                # Sadece EN GÜNCEL tarihi al (Her fonun son durumu)
-                # Her fon grubu için son satırı alıyoruz
-                df_latest = df.groupby('FONKODU').tail(1).copy()
-                
-                print(f"Analiz Tamamlandı. Güncel Fon Sayısı: {len(df_latest)}")
-                return df_latest
+                # API tarihsel sıralı döner, son eleman en günceldir
+                son_veri = data[-1]
+                fiyat = float(son_veri.get('FIYAT', 0))
+                print(f"Güncel Fiyat Bulundu: {fiyat} TL")
+                return fiyat
             else:
-                print("API boş veri döndürdü.")
+                print("Veri bulunamadı.")
                 return None
         else:
-            print(f"API Hatası: Kod {response.status_code}")
+            print(f"API Hatası: {response.status_code}")
             return None
-
     except Exception as e:
         print(f"Hata: {e}")
         return None
 
-def upload_to_firestore(df):
-    collection_name = "fonlar"
-    print("Firebase'e yükleniyor...")
+def save_snapshot():
+    # 1. Fiyatı Çek
+    fiyat = get_tefas_price(SECILEN_FON)
     
-    batch = db.batch()
-    count = 0
-    records = df.to_dict(orient='records')
+    if fiyat is None:
+        print("Fiyat alınamadığı için işlem iptal edildi.")
+        sys.exit(1)
+
+    # 2. Tarih ve Saat Bilgisi
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d") # Döküman ID: 2025-12-03
+    time_str = now.strftime("%H:%M")    # Döküman ID: 19:42
+
+    # 3. Firestore'a Yazma (Senin İstediğin Yapı)
+    # Koleksiyon: fonlar -> Döküman: [Tarih] -> Koleksiyon: snapshots -> Döküman: [Saat]
     
-    for item in records:
-        fon_kodu = item.get('FONKODU')
+    print(f"Firebase'e yazılıyor... Yol: fonlar/{date_str}/snapshots/{time_str}")
+    
+    try:
+        # Önce Tarih Dökümanını oluştur (Boş kalmaması için created_at ekliyoruz)
+        date_ref = db.collection('fonlar').document(date_str)
+        date_ref.set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
         
-        if fon_kodu:
-            doc_ref = db.collection(collection_name).document(fon_kodu)
-            
-            # Kaydedilecek Temiz Veri Paketi
-            # API'den gelen veriler: FONUNADI, KISISAYISI, FONTOPLAMDEGER
-            kayit = {
-                'kod': item.get('FONKODU'),
-                'ad': item.get('FONUNADI'),
-                'fiyat': float(item.get('FIYAT', 0)),
-                'tarih': item.get('tarih_dt'),
-                # Yüzde değişim verisi (Virgülden sonra 2 basamak yuvarla)
-                'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
-                
-                # YENİ EKLENEN DETAYLAR
-                # Yatırımcı Sayısı (Kişi Sayısı) - Güvenli dönüşüm
-                'yatirimci_sayisi': int(float(item.get('KISISAYISI', 0) or 0)),
-                
-                # Fon Büyüklüğü (Toplam Değer)
-                'fon_buyuklugu': float(item.get('FONTOPLAMDEGER', 0) or 0),
-                
-                'son_guncelleme': firestore.SERVER_TIMESTAMP
-            }
-            
-            batch.set(doc_ref, kayit)
-            count += 1
-            
-            if count % 400 == 0:
-                batch.commit()
-                batch = db.batch()
-                print(f"{count} fon işlendi...")
-                
-    batch.commit()
-    print(f"BAŞARILI: Toplam {count} fon (Değişim, Kişi Sayısı ve Büyüklük ile) kaydedildi! 🚀")
+        # Sonra Snapshot'ı ekle
+        snapshot_ref = date_ref.collection('snapshots').document(time_str)
+        
+        # Veri Alanı: fon_tl
+        snapshot_ref.set({
+            'fon_tl': fiyat,
+            # İstersen fon kodunu da ekleyebilirsin ama istemediğin için yorum satırı yaptım:
+            # 'fon_kodu': SECILEN_FON 
+        })
+        
+        print("✅ İŞLEM BAŞARILI! Tek fon snapshot kaydedildi.")
+        
+    except Exception as e:
+        print(f"🔥 Yazma Hatası: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    df = get_tefas_data_with_change()
-    if df is not None:
-        upload_to_firestore(df)
-    else:
-        sys.exit(1)
+    save_snapshot()
