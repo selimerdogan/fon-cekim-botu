@@ -2,8 +2,9 @@ name: Fonları Firebase'e Yükle
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Her gün sabah 09:00
-  workflow_dispatch:
+    # UTC 08:00 = Türkiye Saati ile 11:00
+    - cron: '0 8 * * *'
+  workflow_dispatch: # Manuel çalıştırma butonu kalsın
 
 jobs:
   scrape_and_upload:
@@ -13,7 +14,7 @@ jobs:
       - name: Repoyu Çek
         uses: actions/checkout@v4
 
-      - name: Python Kurulumu (3.11 Güncel Sürüm)
+      - name: Python Kurulumu
         uses: actions/setup-python@v4
         with:
           python-version: '3.11' 
@@ -23,6 +24,5 @@ jobs:
 
       - name: Scripti Çalıştır
         env:
-          # Secret'ı burada ortam değişkeni olarak veriyoruz
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: python main.py
