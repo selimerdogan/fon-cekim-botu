@@ -1,35 +1,31 @@
-name: Fon Botu (Hafta Ici 11:00)
+name: Tek Fon Takip (Hafta İçi 11:00)
 
 on:
   schedule:
-    # Türkiye Saati: 11:00 -> UTC: 08:00
-    # 1-5: Pazartesi'den Cuma'ya (Hafta İçi)
+    # Türkiye Saati 11:00 = UTC 08:00
     - cron: '0 8 * * 1-5'
   
-  # Elle çalıştırmak için buton
   workflow_dispatch:
 
 jobs:
-  build:
+  run-fund-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Kodları Çek
+      - name: Depoyu Çek
         uses: actions/checkout@v3
 
       - name: Python Kur
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       - name: Kütüphaneleri Yükle
-        # Pandas eklemeyi unutma, yoksa kod çalışmaz!
         run: |
-          pip install firebase-admin requests pandas
+          pip install requests firebase-admin
 
-      - name: Fon Botunu Çalıştır
+      - name: Botu Çalıştır
         env:
-          # DİKKAT: GitHub Secret ismin 'FIREBASE_CREDENTIALS' ise burası da öyle olmalı.
-          # Eğer yeni isim verdiysen (FIREBASE_KEY) GitHub ayarlarında da değiştirmelisin.
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
-        run: python main.py
+        run: |
+          python tek_fon_bot.py
