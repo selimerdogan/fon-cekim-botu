@@ -6,7 +6,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select
 from webdriver_manager.chrome import ChromeDriverManager
 from io import StringIO
 import firebase_admin
@@ -44,6 +43,8 @@ def get_fintables_funds():
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
+    
+    all_dataframes = []
 
     try:
         url = "https://fintables.com/fonlar/getiri"
@@ -51,66 +52,86 @@ def get_fintables_funds():
         driver.get(url)
         time.sleep(5)
 
-        # --- 1. ADIM: ÇEREZ UYARISINI KAPAT ---
+        # Çerez uyarısını kapat (Varsa)
         try:
             cookie_buttons = driver.find_elements(By.XPATH, "//button[contains(text(), 'Kabul Et') or contains(text(), 'Tamam') or contains(text(), 'Anladım')]")
             if cookie_buttons:
-                print("Çerez uyarısı kapatılıyor...")
                 driver.execute_script("arguments[0].click();", cookie_buttons[0])
-                time.sleep(2)
+                time.sleep(1)
         except:
             pass
 
-        # --- 2. ADIM: SAYFAYI GENİŞLET (TÜMÜNÜ GÖSTER) ---
-        print("Tablo genişletilmeye çalışılıyor...")
-        try:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-
-            selects = driver.find_elements(By.TAG_NAME, "select")
-            paginator_found = False
+        page_num = 1
+        while True:
+            print(f"--- Sayfa {page_num} İşleniyor ---")
             
-            for select_element in selects:
-                options = select_element.find_elements(By.TAG_NAME, "option")
-                if len(options) > 0:
-                    option_texts = [opt.text for opt in options]
-                    print(f"Dropdown bulundu: {option_texts}")
-                    
-                    # En son seçeneği (Genelde 'Tümü' veya en büyük sayı) seç
-                    driver.execute_script("arguments[0].style.display = 'block';", select_element)
-                    select_object = Select(select_element)
-                    select_object.select_by_index(len(options) - 1)
-                    
-                    paginator_found = True
-                    print("En geniş görünüm seçildi. Tablo güncelleniyor...")
-                    time.sleep(10)
+            # 1. Mevcut Sayfayı Oku
+            html = driver.page_source
+            tables = pd.read_html(StringIO(html))
+            
+            if tables:
+                df = tables[0]
+                # Başlıkları düzelt
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [str(col[-1]).strip() for col in df.columns]
+                else:
+                    df.columns = [str(col).strip() for col in df.columns]
+                
+                df = df.astype(str)
+                all_dataframes.append(df)
+                print(f"Sayfa {page_num}: {len(df)} adet fon alındı.")
+            
+            # 2. Sonraki Sayfaya Geçmeye Çalış
+            try:
+                # Sayfanın altına in
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1)
+                
+                # 'Sonraki' butonunu bulmaya çalışıyoruz.
+                # Genelde '>' işareti veya 'Sonraki' yazısı olur.
+                # aria-label="Next page" veya class="pagination-next" gibi özelliklere bakıyoruz.
+                next_buttons = driver.find_elements(By.XPATH, """
+                    //button[contains(., '›') or contains(., '>') or contains(@aria-label, 'Next') or contains(@class, 'next')] 
+                    | 
+                    //a[contains(., '›') or contains(., '>') or contains(@class, 'next')]
+                    |
+                    //li[contains(@class, 'next')]/a
+                """)
+                
+                found_next = False
+                for btn in next_buttons:
+                    # Buton görünür mü ve tıklanabilir mi?
+                    if btn.is_displayed() and "disabled" not in btn.get_attribute("class"):
+                        # Sonraki sayfaya tıkla
+                        driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(3) # Sayfa yüklenmesi için bekle
+                        found_next = True
+                        page_num += 1
+                        break
+                
+                if not found_next:
+                    print("Sonraki sayfa butonu bulunamadı veya son sayfadayız.")
                     break
-            
-            if not paginator_found:
-                print("UYARI: Sayfalama kutusu (Select) bulunamadı.")
+                    
+            except Exception as e:
+                print(f"Sayfa geçiş hatası veya son sayfa: {e}")
+                break
+                
+            # Sonsuz döngü koruması (Maksimum 50 sayfa)
+            if page_num > 50:
+                break
 
-        except Exception as e:
-            print(f"Genişletme Hatası: {e}")
-
-        # -----------------------------
-
-        html = driver.page_source
-        tables = pd.read_html(StringIO(html))
-        
-        if tables:
-            df = tables[0]
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [str(col[-1]).strip() for col in df.columns]
-            else:
-                df.columns = [str(col).strip() for col in df.columns]
-            
-            df = df.astype(str)
-            return df
+        # Tüm sayfaları birleştir
+        if all_dataframes:
+            final_df = pd.concat(all_dataframes, ignore_index=True)
+            # Tekrar edenleri temizle (Sayfa geçişlerinde bazen çakışma olur)
+            final_df = final_df.drop_duplicates()
+            return final_df
         else:
             return None
 
     except Exception as e:
-        print(f"Scrape Hatası: {e}")
+        print(f"Genel Hata: {e}")
         return None
     finally:
         driver.quit()
@@ -119,7 +140,7 @@ def upload_to_firestore(df):
     collection_name = "fonlar"
     
     print("-" * 30)
-    print(f"TOPLAM ÇEKİLEN FON SAYISI: {len(df)}")
+    print(f"TOPLAM TOPLANAN FON SAYISI: {len(df)}")
     print("-" * 30)
     
     target_col = df.columns[0]
@@ -136,7 +157,6 @@ def upload_to_firestore(df):
     for item in records:
         raw_code = item.get(target_col)
         
-        # HATA ALINAN SATIR BURASIYDI - DÜZELTİLDİ
         if raw_code and str(raw_code).lower() not in ['nan', 'none', '']:
             fon_kodu = str(raw_code).strip().replace('/', '-')
             
