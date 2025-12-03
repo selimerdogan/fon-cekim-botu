@@ -11,17 +11,33 @@ from firebase_admin import firestore
 import json
 import os
 
-# 1. Firebase Bağlantısını Kur
-# GitHub Action ortamında mıyız kontrol edelim
-cred_path = "serviceAccountKey.json"
+# --- GÜNCELLENEN KISIM BAŞLANGIÇ ---
+# Dosya aramak yerine doğrudan GitHub Secret'ı okuyoruz
+firebase_creds_str = os.environ.get('FIREBASE_CREDENTIALS')
 
-if os.path.exists(cred_path):
-    cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
+if firebase_creds_str:
+    # Gelen string'i JSON objesine çevir
+    cred_dict = json.loads(firebase_creds_str)
+    cred = credentials.Certificate(cred_dict)
+    
+    # Firebase'i başlat (Zaten başlatılmadıysa)
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(cred)
+    
     db = firestore.client()
 else:
-    print("Hata: Firebase anahtar dosyası bulunamadı!")
-    exit(1)
+    # Eğer lokal bilgisayarınızda test ediyorsanız buraya düşebilir
+    # Lokal test için manuel dosya yolu:
+    if os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        if not firebase_admin._apps:
+             firebase_admin.initialize_app(cred)
+        db = firestore.client()
+    else:
+        print("KRİTİK HATA: Firebase kimlik bilgileri bulunamadı!")
+        print("GitHub'da iseniz 'FIREBASE_CREDENTIALS' secret'ının tanımlı olduğundan emin olun.")
+        exit(1)
+# --- GÜNCELLENEN KISIM BİTİŞ ---
 
 def get_fintables_funds():
     chrome_options = Options()
@@ -38,21 +54,17 @@ def get_fintables_funds():
         url = "https://fintables.com/fonlar/getiri"
         print("Fintables'a gidiliyor...")
         driver.get(url)
-        time.sleep(10) # Yükleme beklemesi
+        time.sleep(10)
 
         html = driver.page_source
+        
+        # Pandas read_html uyarısını engellemek için sarmalama
         tables = pd.read_html(StringIO(html))
         
         if tables:
             df = tables[0]
-            
-            # Veri Temizliği: Firestore sütun adlarında nokta (.) sevmez, onları temizleyelim
-            # Ayrıca NaN (boş) değerleri None yapalım ki Firestore hata vermesin
+            # Veri temizliği: NaN değerleri None yap (Firestore için)
             df = df.where(pd.notnull(df), None)
-            
-            # Sütun isimlerindeki potansiyel sorunlu karakterleri düzeltelim (opsiyonel)
-            # df.columns = [c.replace('.', '') for c in df.columns]
-
             return df
         else:
             return None
@@ -67,27 +79,19 @@ def upload_to_firestore(df):
     collection_name = "fonlar"
     print(f"{len(df)} adet fon Firestore'a yükleniyor...")
     
-    batch = db.batch()
-    counter = 0
-    
-    # DataFrame'i sözlük listesine çevir
     records = df.to_dict(orient='records')
     
+    # İlerlemeyi görmek için basit sayaç
+    count = 0
     for item in records:
-        # Fintables tablosundaki 'Kod' sütununu Belge ID'si (Document ID) yapıyoruz.
-        # Böylece aynı fon tekrar eklendiğinde üzerine yazar (update eder), çift kayıt oluşmaz.
-        fon_kodu = item.get('Kod') 
-        
+        fon_kodu = item.get('Kod')
         if fon_kodu:
             doc_ref = db.collection(collection_name).document(fon_kodu)
-            # Veriye çekilme zamanı ekleyelim
             item['guncellenme_tarihi'] = firestore.SERVER_TIMESTAMP
-            doc_ref.set(item) # .set() varsa ezer, yoksa oluşturur
+            doc_ref.set(item)
+            count += 1
             
-            # Firestore batch limiti 500 işlemdir, burada tek tek yazıyoruz ama
-            # daha hızlı olsun derseniz batch mantığı kurulabilir. Şimdilik basit set() yeterli.
-            
-    print("Yükleme tamamlandı.")
+    print(f"İşlem Tamamlandı: {count} fon güncellendi.")
 
 if __name__ == "__main__":
     df_funds = get_fintables_funds()
