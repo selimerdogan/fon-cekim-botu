@@ -22,7 +22,7 @@ jobs:
 
       - name: Kütüphaneleri Yükle
         run: |
-          pip install requests pandas firebase-admin
+          pip install requests pandas firebase-admin tefas-crawler
 
       - name: Botu Çalıştır
         env:
