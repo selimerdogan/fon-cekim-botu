@@ -61,9 +61,10 @@ def get_fintables_funds():
         except:
             pass
 
-        page_num = 1
+        current_page_num = 1
+        
         while True:
-            print(f"--- Sayfa {page_num} İşleniyor ---")
+            print(f"--- Sayfa {current_page_num} Taranıyor ---")
             
             # 1. Mevcut Sayfayı Oku
             html = driver.page_source
@@ -71,7 +72,7 @@ def get_fintables_funds():
             
             if tables:
                 df = tables[0]
-                # Başlıkları düzelt
+                # Başlık Temizliği
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = [str(col[-1]).strip() for col in df.columns]
                 else:
@@ -79,52 +80,58 @@ def get_fintables_funds():
                 
                 df = df.astype(str)
                 all_dataframes.append(df)
-                print(f"Sayfa {page_num}: {len(df)} adet fon alındı.")
+                print(f"Sayfa {current_page_num}: {len(df)} veri alındı.")
             
-            # 2. Sonraki Sayfaya Geçmeye Çalış
+            # 2. Bir Sonraki Sayfa Numarasına Tıkla
+            target_page_num = current_page_num + 1
+            
             try:
-                # Sayfanın altına in
+                # Sayfanın en altına in
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(1)
                 
-                # 'Sonraki' butonunu bulmaya çalışıyoruz.
-                # Genelde '>' işareti veya 'Sonraki' yazısı olur.
-                # aria-label="Next page" veya class="pagination-next" gibi özelliklere bakıyoruz.
-                next_buttons = driver.find_elements(By.XPATH, """
-                    //button[contains(., '›') or contains(., '>') or contains(@aria-label, 'Next') or contains(@class, 'next')] 
-                    | 
-                    //a[contains(., '›') or contains(., '>') or contains(@class, 'next')]
-                    |
-                    //li[contains(@class, 'next')]/a
-                """)
+                # Hedef numaranın olduğu butonu bul (Örn: "2" yazan buton)
+                # Hem <a> hem <button> hem de <li> içinde arar.
+                xpath_query = f"//a[text()='{target_page_num}'] | //button[text()='{target_page_num}'] | //li[text()='{target_page_num}']"
+                
+                next_page_elements = driver.find_elements(By.XPATH, xpath_query)
                 
                 found_next = False
-                for btn in next_buttons:
-                    # Buton görünür mü ve tıklanabilir mi?
-                    if btn.is_displayed() and "disabled" not in btn.get_attribute("class"):
-                        # Sonraki sayfaya tıkla
-                        driver.execute_script("arguments[0].click();", btn)
-                        time.sleep(3) # Sayfa yüklenmesi için bekle
+                for elem in next_page_elements:
+                    if elem.is_displayed():
+                        # JavaScript ile tıkla (Böylece üzerine bir şey binse bile tıklar)
+                        driver.execute_script("arguments[0].click();", elem)
+                        time.sleep(3) # Yüklenmesi için bekle
                         found_next = True
-                        page_num += 1
+                        current_page_num += 1
                         break
                 
                 if not found_next:
-                    print("Sonraki sayfa butonu bulunamadı veya son sayfadayız.")
-                    break
+                    # Belki numara buton olarak değil, "İleri" oku olarak vardır
+                    # Eğer numara bulamazsak son çare ok işaretini deneriz
+                    print(f"Sayfa {target_page_num} numarası bulunamadı, 'Sonraki' butonu deneniyor...")
+                    next_arrows = driver.find_elements(By.XPATH, "//button[contains(@class, 'next')] | //li[contains(@class, 'next')]")
                     
+                    if next_arrows:
+                         driver.execute_script("arguments[0].click();", next_arrows[0])
+                         time.sleep(3)
+                         current_page_num += 1
+                    else:
+                        print("Gidilecek başka sayfa kalmadı.")
+                        break
+
             except Exception as e:
-                print(f"Sayfa geçiş hatası veya son sayfa: {e}")
+                print(f"Sayfa geçiş hatası: {e}")
                 break
                 
-            # Sonsuz döngü koruması (Maksimum 50 sayfa)
-            if page_num > 50:
+            # Güvenlik Limiti (Sonsuz döngüye girmesin)
+            if current_page_num > 50:
+                print("Sayfa limiti (50) aşıldı.")
                 break
 
         # Tüm sayfaları birleştir
         if all_dataframes:
             final_df = pd.concat(all_dataframes, ignore_index=True)
-            # Tekrar edenleri temizle (Sayfa geçişlerinde bazen çakışma olur)
             final_df = final_df.drop_duplicates()
             return final_df
         else:
@@ -140,7 +147,7 @@ def upload_to_firestore(df):
     collection_name = "fonlar"
     
     print("-" * 30)
-    print(f"TOPLAM TOPLANAN FON SAYISI: {len(df)}")
+    print(f"TOPLAM İNDİRİLEN FON: {len(df)}")
     print("-" * 30)
     
     target_col = df.columns[0]
@@ -180,5 +187,5 @@ if __name__ == "__main__":
     if df_funds is not None:
         upload_to_firestore(df_funds)
     else:
-        print("HATA: Veri boş geldi.")
+        print("HATA: Veri çekilemedi.")
         exit(1)
