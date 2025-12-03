@@ -1,3 +1,3 @@
-requests
+tefas-crawler
 pandas
 firebase-admin
