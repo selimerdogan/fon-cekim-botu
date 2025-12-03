@@ -21,7 +21,6 @@ if firebase_creds_str:
         firebase_admin.initialize_app(cred)
     db = firestore.client()
 else:
-    # Lokal test için
     if os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
         if not firebase_admin._apps:
@@ -53,11 +52,21 @@ def get_fintables_funds():
         
         if tables:
             df = tables[0]
-            # Tüm verileri string (yazı) yapalım ki hata çıkmasın
+            
+            # --- KRİTİK DÜZELTME BAŞLANGIÇ ---
+            # 1. Eğer başlıklar MultiIndex (Tuple) ise düzleştir
+            if isinstance(df.columns, pd.MultiIndex):
+                # Sadece son seviyedeki başlığı al (Örn: ('#', 'Kod') -> 'Kod')
+                df.columns = [str(col[-1]).strip() for col in df.columns]
+            else:
+                df.columns = [str(col).strip() for col in df.columns]
+            
+            # 2. Tüm verileri string'e çevir (Firestore hatasını önler)
             df = df.astype(str)
+            # --- KRİTİK DÜZELTME BİTİŞ ---
+            
             return df
         else:
-            print("HATA: Sayfada tablo bulunamadı!")
             return None
 
     except Exception as e:
@@ -69,48 +78,54 @@ def get_fintables_funds():
 def upload_to_firestore(df):
     collection_name = "fonlar"
     
-    # 1. Debug: Tablonun ilk 3 satırını yazdıralım (Sorun varsa görelim)
+    # Tabloyu kontrol edelim
     print("-" * 30)
-    print("ÇEKİLEN VERİ ÖRNEĞİ:")
-    print(df.head(3))
+    print(f"Düzeltilmiş Sütunlar: {df.columns.tolist()}")
+    print("İlk satır verisi:", df.iloc[0].tolist())
     print("-" * 30)
 
-    # İlk sütun her zaman Fon Kodudur, ismine bakmadan direkt onu alıyoruz.
-    ilk_sutun_ismi = df.columns[0]
-    print(f"Fon Kodları '{ilk_sutun_ismi}' sütunundan okunuyor.")
+    # FON KODU HANGİ SÜTUNDA?
+    # Genelde 2. sütun (Index 1) kod olur (AAK, AAL...). 
+    # İlk sütun (Index 0) genelde sıra numarasıdır (1, 2, 3...).
+    target_col = df.columns[0] # Varsayılan
     
+    # Eğer "Kod" isminde bir sütun varsa onu kullan, yoksa mantıksal arama yap
+    kod_cols = [c for c in df.columns if "Kod" in c or "Code" in c]
+    if kod_cols:
+        target_col = kod_cols[0]
+        print(f"BULDUM: Fon Kodları '{target_col}' sütunundan alınacak.")
+    else:
+        # İsimle bulamadıysak 2. sütuna bakalım (Genelde kod oradadır)
+        if len(df.columns) > 1:
+            target_col = df.columns[1]
+            print(f"OTOMATİK: İsim bulunamadı, 2. sütun ('{target_col}') kod olarak seçildi.")
+
     records = df.to_dict(orient='records')
     count = 0
-    
-    batch = db.batch() # Hızlı yazma modu
+    batch = db.batch()
     
     for item in records:
-        # Fon kodunu al ve temizle
-        raw_code = item.get(ilk_sutun_ismi)
+        raw_code = item.get(target_col)
         
-        # 'nan', 'None' veya boş değilse işlem yap
+        # Kod geçerli mi kontrol et (Boş değilse ve 3 harfliyse genelde fondur)
         if raw_code and raw_code.lower() not in ['nan', 'none', '']:
-            fon_kodu = str(raw_code).strip()
+            # "/" işaretini temizle (Firestore ID kuralları)
+            fon_kodu = str(raw_code).strip().replace('/', '-')
             
-            # Belge ID'si olarak kullanacağımız için "/" gibi işaretleri silelim
-            doc_id = fon_kodu.replace('/', '-')
+            # Gereksiz sayısal index sütununu veritabanına kaydetmeye gerek yok
+            # (Opsiyonel temizlik)
             
-            doc_ref = db.collection(collection_name).document(doc_id)
-            
-            # Veriye zaman damgası ekle
+            doc_ref = db.collection(collection_name).document(fon_kodu)
             item['guncellenme_tarihi'] = firestore.SERVER_TIMESTAMP
             
-            # Batch'e ekle (Toplu gönderme)
             batch.set(doc_ref, item)
             count += 1
             
-            # Firebase limiti: Her 400 işlemde bir gönderip batch'i boşaltalım
             if count % 400 == 0:
                 batch.commit()
                 batch = db.batch()
-                print(f"{count} fon yazıldı...")
+                print(f"{count} fon işlendi...")
 
-    # Kalanları gönder
     batch.commit()
     print(f"BAŞARILI: Toplam {count} fon Firebase'e yüklendi!")
 
@@ -120,5 +135,5 @@ if __name__ == "__main__":
     if df_funds is not None:
         upload_to_firestore(df_funds)
     else:
-        print("Tablo boş geldiği için işlem iptal edildi.")
+        print("HATA: Veri boş geldi.")
         exit(1)
