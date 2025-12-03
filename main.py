@@ -1,21 +1,26 @@
 import requests
 import pandas as pd
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+from firebase_admin import credentials, firestore
 import json
 import os
 from datetime import datetime, timedelta
+import sys
 
 # --- FIREBASE BAĞLANTISI ---
+# GitHub Secret'tan gelen anahtarı kullanır
 firebase_creds_str = os.environ.get('FIREBASE_CREDENTIALS')
 
 if firebase_creds_str:
-    cred_dict = json.loads(firebase_creds_str)
-    cred = credentials.Certificate(cred_dict)
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app(cred)
-    db = firestore.client()
+    try:
+        cred_dict = json.loads(firebase_creds_str)
+        cred = credentials.Certificate(cred_dict)
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+        db = firestore.client()
+    except Exception as e:
+        print(f"Firebase Bağlantı Hatası: {e}")
+        sys.exit(1)
 else:
     # Lokal test için
     if os.path.exists("serviceAccountKey.json"):
@@ -25,31 +30,25 @@ else:
         db = firestore.client()
     else:
         print("HATA: Firebase anahtarı bulunamadı.")
-        exit(1)
+        sys.exit(1)
 
-def get_tefas_data_direct():
-    print("TEFAS API'sine bağlanılıyor...")
+def get_tefas_data_with_change():
+    print("TEFAS API'sine bağlanılıyor (Değişim Analizi Modu)...")
     
-    # TEFAS'ın resmi API adresi
     url = "https://www.tefas.gov.tr/api/DB/BindHistoryInfo"
     
-    # Tarih Ayarı: Garanti olsun diye son 7 günü tarayalım
-    # TEFAS tarih formatı: "dd.mm.yyyy" (Örn: 03.12.2025)
+    # Son 10 günün verisini alalım (Tatilleri atlamak için geniş tutuyoruz)
     today = datetime.now()
-    start_date = today - timedelta(days=7)
+    start_date = today - timedelta(days=10)
     
-    date_fmt = "%d.%m.%Y"
-    
-    # API'ye gönderilecek "Mektup" (Payload)
     payload = {
-        "fontip": "YAT", # Yatırım Fonları
+        "fontip": "YAT",
         "sfontip": "",
-        "bastarih": start_date.strftime(date_fmt),
-        "bittarih": today.strftime(date_fmt),
-        "fonkod": "" # Boş bırakırsak hepsini getirir
+        "bastarih": start_date.strftime("%d.%m.%Y"),
+        "bittarih": today.strftime("%d.%m.%Y"),
+        "fonkod": ""
     }
     
-    # Kendimizi tarayıcı gibi tanıtacak başlıklar (Headers)
     headers = {
         "Content-Type": "application/json;charset=UTF-8",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -65,31 +64,36 @@ def get_tefas_data_direct():
             data = result.get('data', [])
             
             if data:
-                print(f"API Yanıt Verdi! Toplam {len(data)} satır veri çekildi.")
-                
-                # JSON verisini DataFrame'e çevir
+                print(f"API'den {len(data)} satır veri çekildi. Analiz başlıyor...")
                 df = pd.DataFrame(data)
                 
-                # Sütun İsimleri TEFAS'tan şöyle gelir: 
-                # FONKODU, FONUNADI, FIYAT, TARIH vb.
-                
-                # En son tarihe ait verileri filtreleyelim
-                # Tarih sütunu UNIX timestamp veya string gelebilir, kontrol edelim.
-                # Genelde 'TARIH' alanı epoch (sayı) olarak gelir.
-                
+                # Tarih sütununu düzelt (Unix Timestamp -> Datetime)
+                # TEFAS genelde milisaniye cinsinden epoch gönderir
                 if 'TARIH' in df.columns:
-                    # En büyük (en yeni) tarihi bul
-                    max_date = df['TARIH'].max()
-                    df_latest = df[df['TARIH'] == max_date].copy()
-                    
-                    # Tarihi okunabilir formata çevir (Opsiyonel)
-                    # TEFAS epoch formatı genelde milisaniyedir (/1000 gerekebilir)
-                    
-                    print(f"Filtreleme Sonrası Güncel Fon Sayısı: {len(df_latest)}")
-                    return df_latest
+                    df['tarih_dt'] = pd.to_datetime(df['TARIH'], unit='ms')
                 else:
-                    print("UYARI: Tarih sütunu bulunamadı, tüm veri dönülüyor.")
-                    return df
+                    print("HATA: Tarih sütunu bulunamadı.")
+                    return None
+
+                # Veriyi Fon Kodu ve Tarihe göre sırala
+                df = df.sort_values(by=['FONKODU', 'tarih_dt'])
+                
+                # --- GÜNLÜK DEĞİŞİM HESAPLAMA SİHRİ ---
+                # Her fon grubu içinde 'shift' yaparak bir önceki günün fiyatını yanına getiriyoruz
+                df['onceki_fiyat'] = df.groupby('FONKODU')['FIYAT'].shift(1)
+                
+                # Yüzdelik Değişim Formülü: ((Yeni - Eski) / Eski) * 100
+                df['gunluk_degisim'] = ((df['FIYAT'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
+                
+                # Değişim verisi olmayanları (ilk gün verisi) 0 yap
+                df['gunluk_degisim'] = df['gunluk_degisim'].fillna(0.0)
+                
+                # Sadece EN GÜNCEL tarihi al (Her fonun son durumu)
+                # Her fon grubu için son satırı alıyoruz
+                df_latest = df.groupby('FONKODU').tail(1).copy()
+                
+                print(f"Analiz Tamamlandı. Güncel Fon Sayısı: {len(df_latest)}")
+                return df_latest
             else:
                 print("API boş veri döndürdü.")
                 return None
@@ -98,34 +102,35 @@ def get_tefas_data_direct():
             return None
 
     except Exception as e:
-        print(f"Bağlantı Hatası: {e}")
+        print(f"Hata: {e}")
         return None
 
 def upload_to_firestore(df):
     collection_name = "fonlar"
-    print("Firebase'e yükleme başlıyor...")
+    print("Firebase'e yükleniyor...")
     
     batch = db.batch()
     count = 0
     records = df.to_dict(orient='records')
     
     for item in records:
-        # TEFAS API'sinden gelen anahtar isimleri BÜYÜK HARFLİDİR (FONKODU, FIYAT vb.)
         fon_kodu = item.get('FONKODU')
         
         if fon_kodu:
             doc_ref = db.collection(collection_name).document(fon_kodu)
             
-            # Veri tiplerini düzeltelim (Firestore uyumu için)
-            item['guncellenme_tarihi'] = firestore.SERVER_TIMESTAMP
+            # Kaydedilecek Temiz Veri Paketi
+            kayit = {
+                'kod': item.get('FONKODU'),
+                'ad': item.get('FONUNADI'),
+                'fiyat': float(item.get('FIYAT', 0)),
+                'tarih': item.get('tarih_dt'),
+                # Yüzde değişim verisi (Virgülden sonra 2 basamak yuvarla)
+                'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
+                'son_guncelleme': firestore.SERVER_TIMESTAMP
+            }
             
-            # Tüm sayısal olmayan değerleri string yapalım ki hata çıkmasın
-            for key, val in item.items():
-                if val is None:
-                    item[key] = ""
-                # Tarih epoch ise dokunmayalım, okunabilir olsun derseniz çevirebiliriz
-            
-            batch.set(doc_ref, item)
+            batch.set(doc_ref, kayit)
             count += 1
             
             if count % 400 == 0:
@@ -134,12 +139,11 @@ def upload_to_firestore(df):
                 print(f"{count} fon işlendi...")
                 
     batch.commit()
-    print(f"BAŞARILI: Toplam {count} fon veritabanına yazıldı! 🚀")
+    print(f"BAŞARILI: Toplam {count} fon (Değişim oranlarıyla) kaydedildi! 🚀")
 
 if __name__ == "__main__":
-    df = get_tefas_data_direct()
+    df = get_tefas_data_with_change()
     if df is not None:
         upload_to_firestore(df)
     else:
-        print("İşlem başarısız.")
-        exit(1)
+        sys.exit(1)
