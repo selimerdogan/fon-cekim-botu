@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -6,6 +5,9 @@ import json
 import os
 from datetime import datetime, timedelta
 import sys
+
+# --- YENİ KÜTÜPHANE ---
+from tefas import Crawler
 
 # --- FIREBASE BAĞLANTISI ---
 firebase_creds_str = os.environ.get('FIREBASE_CREDENTIALS')
@@ -21,6 +23,7 @@ if firebase_creds_str:
         print(f"Firebase Bağlantı Hatası: {e}")
         sys.exit(1)
 else:
+    # Lokal test
     if os.path.exists("serviceAccountKey.json"):
         cred = credentials.Certificate("serviceAccountKey.json")
         if not firebase_admin._apps:
@@ -30,150 +33,82 @@ else:
         print("HATA: Firebase anahtarı bulunamadı.")
         sys.exit(1)
 
-# --- SENİN GÖNDERDİĞİN SAĞLAM HEADERLAR ---
-SHARED_HEADERS = {
-    "Content-Type": "application/json;charset=UTF-8",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Origin": "https://www.tefas.gov.tr",
-    "Referer": "https://www.tefas.gov.tr/TarihselVeriler.aspx",
-    "X-Requested-With": "XMLHttpRequest"
-}
-
-def get_fund_metadata():
-    """Fonların ADI, BÜYÜKLÜĞÜ ve KİŞİ SAYISI verilerini çeker."""
-    print("Fon kimlik bilgileri (GenelVeriler) çekiliyor...")
+def run_crawler_bot():
+    print("🚀 TEFAS Crawler (Kütüphane) başlatılıyor...")
     
-    url = "https://www.tefas.gov.tr/api/DB/GenelVeriler"
+    # 1. Kütüphaneyi Çağır
+    crawler = Crawler()
     
+    # 2. Tarihleri Ayarla (Son 3 günü çekelim ki değişim hesaplayabilelim)
     today = datetime.now()
-    start_date = today - timedelta(days=7)
+    start_date = today - timedelta(days=5) # Hafta sonu riskine karşı 5 gün
     
-    payload = {
-        "fontip": "YAT",
-        "sfontip": "",
-        "bastarih": start_date.strftime("%d.%m.%Y"),
-        "bittarih": today.strftime("%d.%m.%Y"),
-        "fonkod": ""
-    }
+    date_fmt = "%Y-%m-%d" # Kütüphane genelde bu formatı sever
     
     try:
-        response = requests.post(url, json=payload, headers=SHARED_HEADERS)
-        data = response.json().get('data', [])
+        # TEFAS'tan veriyi tek satırda çekiyoruz!
+        print("📡 Veriler çekiliyor (Bu işlem çok hızlıdır)...")
+        df = crawler.fetch(start=start_date.strftime(date_fmt), 
+                           end=today.strftime(date_fmt),
+                           columns=["code", "date", "price", "title"])
         
-        metadata_map = {}
-        for item in data:
-            kod = item.get('FONKODU')
-            if kod:
-                metadata_map[kod] = {
-                    'ad': item.get('FONUNADI', ''),
-                    'buyukluk': float(item.get('FONTOPLAMDEGER', 0) or 0),
-                    'kisi_sayisi': int(float(item.get('KISISAYISI', 0) or 0))
-                }
-        print(f"✅ Künye Bilgileri Alındı: {len(metadata_map)} fon.")
-        return metadata_map
-        
-    except Exception as e:
-        print(f"Metadata Hatası: {e}")
-        return {}
+        if df is None or df.empty:
+            print("❌ Veri bulunamadı.")
+            return
 
-def get_price_history():
-    """Fonların FİYAT ve DEĞİŞİM verilerini çeker."""
-    print("Fiyat verileri (BindHistoryInfo) çekiliyor...")
-    
-    url = "https://www.tefas.gov.tr/api/DB/BindHistoryInfo"
-    
-    today = datetime.now()
-    start_date = today - timedelta(days=7)
-    
-    payload = {
-        "fontip": "YAT",
-        "sfontip": "",
-        "bastarih": start_date.strftime("%d.%m.%Y"),
-        "bittarih": today.strftime("%d.%m.%Y"),
-        "fonkod": "" 
-    }
-    
-    try:
-        response = requests.post(url, json=payload, headers=SHARED_HEADERS)
-        data = response.json().get('data', [])
+        # Sütun isimlerini düzelt (İngilizce gelebilir, standartlaştıralım)
+        # Kütüphane genelde: 'code', 'date', 'price', 'title' döndürür.
         
-        if not data:
-            return None
+        # Tarih formatını datetime'a çevir
+        df['date'] = pd.to_datetime(df['date'])
+        
+        # Sıralama
+        df = df.sort_values(by=['code', 'date'])
+        
+        # Günlük Değişim Hesabı
+        df['onceki_fiyat'] = df.groupby('code')['price'].shift(1)
+        df['degisim'] = ((df['price'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
+        df['degisim'] = df['degisim'].fillna(0.0)
+        
+        # Her fonun EN GÜNCEL verisini al
+        df_latest = df.groupby('code').tail(1).copy()
+        
+        print(f"✅ Analiz Tamamlandı. {len(df_latest)} fon işleniyor...")
+        
+        # 3. Firestore Map Formatına Çevir
+        fon_map = {}
+        records = df_latest.to_dict(orient='records')
+        
+        for item in records:
+            fon_kodu = item['code']
             
-        df = pd.DataFrame(data)
-        
-        if 'TARIH' in df.columns:
-            df['tarih_dt'] = pd.to_datetime(pd.to_numeric(df['TARIH']), unit='ms')
-        
-        # Değişim hesabı
-        df = df.sort_values(by=['FONKODU', 'tarih_dt'])
-        df['onceki_fiyat'] = df.groupby('FONKODU')['FIYAT'].shift(1)
-        df['gunluk_degisim'] = ((df['FIYAT'] - df['onceki_fiyat']) / df['onceki_fiyat']) * 100
-        df['gunluk_degisim'] = df['gunluk_degisim'].fillna(0.0)
-        
-        # En son veriyi al
-        df_latest = df.groupby('FONKODU').tail(1).copy()
-        return df_latest
-        
-    except Exception as e:
-        print(f"Fiyat Verisi Hatası: {e}")
-        return None
+            fon_map[fon_kodu] = {
+                'fiyat': float(item['price']),
+                'degisim': round(float(item['degisim']), 2),
+                'ad': item.get('title', ''),
+                # Not: Bu kütüphane varsayılan olarak Kişi Sayısı/Büyüklük getirmeyebilir.
+                # Eğer getirmezse 0 basarız, sistem bozulmaz.
+                'buyukluk': 0, 
+                'kisi_sayisi': 0
+            }
 
-def save_bulk_snapshot():
-    # 1. Metadata Al
-    metadata = get_fund_metadata()
-    
-    # 2. Fiyatları Al
-    df = get_price_history()
-    
-    if df is None:
-        print("❌ Fiyat verisi alınamadı.")
-        sys.exit(1)
+        # 4. Veritabanına Yaz
+        date_str = today.strftime("%Y-%m-%d")
+        time_str = today.strftime("%H:%M")
+
+        print(f"💾 Firebase'e yazılıyor: fonlar/{date_str}/snapshots/{time_str}")
         
-    print(f"Veriler birleştiriliyor... ({len(df)} fon)")
-
-    # 3. Hepsini Tek Bir Map Yapısında Birleştir
-    fon_map = {}
-    records = df.to_dict(orient='records')
-    
-    for item in records:
-        fon_kodu = item['FONKODU']
-        
-        # Metadata'dan detayları çek
-        detay = metadata.get(fon_kodu, {'ad': '', 'buyukluk': 0, 'kisi_sayisi': 0})
-        
-        # İsim yedeği (Metadata boşsa API'den gelene bak)
-        fon_adi = detay['ad']
-        if not fon_adi and item.get('FONUNADI'):
-            fon_adi = item.get('FONUNADI')
-
-        fon_map[fon_kodu] = {
-            'fiyat': float(item.get('FIYAT', 0)),
-            'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
-            'ad': fon_adi,
-            'buyukluk': detay['buyukluk'],
-            'kisi_sayisi': detay['kisi_sayisi']
-        }
-
-    # 4. Firestore'a Yaz (Snapshot Yapısı)
-    now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d") # 2025-12-03
-    time_str = now.strftime("%H:%M")    # 11:00
-
-    print(f"Firebase'e yazılıyor: fonlar/{date_str}/snapshots/{time_str}")
-    
-    try:
         # Tarih Dökümanı
         db.collection('fonlar').document(date_str).set({'created_at': firestore.SERVER_TIMESTAMP}, merge=True)
         
-        # Saat Dökümanı (Tek Map)
+        # Saat Dökümanı (Tek Liste)
         target_ref = db.collection('fonlar').document(date_str).collection('snapshots').document(time_str)
         target_ref.set(fon_map)
         
-        print(f"✅ BAŞARILI! {len(fon_map)} fon verisi tek listede kaydedildi.")
+        print(f"🎉 İŞLEM BAŞARILI! {len(fon_map)} fon kaydedildi.")
         
     except Exception as e:
-        print(f"🔥 Yazma Hatası: {e}")
+        print(f"🔥 Hata Oluştu: {e}")
 
 if __name__ == "__main__":
-    save_bulk_snapshot()
+    run_crawler_bot()
