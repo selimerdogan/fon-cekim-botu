@@ -1,7 +1,3 @@
-selenium
+tefas-crawler
 pandas
-webdriver-manager
 firebase-admin
-lxml
-html5lib
-beautifulsoup4
