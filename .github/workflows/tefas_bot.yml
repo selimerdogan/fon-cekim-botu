@@ -1,28 +1,32 @@
-name: Fonları Firebase'e Yükle
+name: Fon Botu (Hafta Ici 11:00)
 
 on:
   schedule:
-    # UTC 08:00 = Türkiye Saati ile 11:00
-    - cron: '0 8 * * *'
-  workflow_dispatch: # Manuel çalıştırma butonu kalsın
+    # Türkiye Saati: 11:00 -> UTC: 08:00
+    # 1-5: Pazartesi'den Cuma'ya (Hafta İçi)
+    - cron: '0 8 * * 1-5'
+  
+  # Elle çalıştırmak için
+  workflow_dispatch:
 
 jobs:
-  scrape_and_upload:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repoyu Çek
-        uses: actions/checkout@v4
+      - name: Kodları Çek
+        uses: actions/checkout@v3
 
-      - name: Python Kurulumu
+      - name: Python Kur
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11' 
+          python-version: '3.11'
 
       - name: Kütüphaneleri Yükle
-        run: pip install -r requirements.txt
+        run: |
+          pip install firebase-admin requests
 
-      - name: Scripti Çalıştır
+      - name: Fon Botunu Çalıştır
         env:
-          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
-        run: python main.py
+          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+        run: python tefas_bot.py
