@@ -120,6 +120,7 @@ def upload_to_firestore(df):
             doc_ref = db.collection(collection_name).document(fon_kodu)
             
             # Kaydedilecek Temiz Veri Paketi
+            # API'den gelen veriler: FONUNADI, KISISAYISI, FONTOPLAMDEGER
             kayit = {
                 'kod': item.get('FONKODU'),
                 'ad': item.get('FONUNADI'),
@@ -127,6 +128,14 @@ def upload_to_firestore(df):
                 'tarih': item.get('tarih_dt'),
                 # Yüzde değişim verisi (Virgülden sonra 2 basamak yuvarla)
                 'degisim': round(float(item.get('gunluk_degisim', 0)), 2),
+                
+                # YENİ EKLENEN DETAYLAR
+                # Yatırımcı Sayısı (Kişi Sayısı) - Güvenli dönüşüm
+                'yatirimci_sayisi': int(float(item.get('KISISAYISI', 0) or 0)),
+                
+                # Fon Büyüklüğü (Toplam Değer)
+                'fon_buyuklugu': float(item.get('FONTOPLAMDEGER', 0) or 0),
+                
                 'son_guncelleme': firestore.SERVER_TIMESTAMP
             }
             
@@ -139,7 +148,7 @@ def upload_to_firestore(df):
                 print(f"{count} fon işlendi...")
                 
     batch.commit()
-    print(f"BAŞARILI: Toplam {count} fon (Değişim oranlarıyla) kaydedildi! 🚀")
+    print(f"BAŞARILI: Toplam {count} fon (Değişim, Kişi Sayısı ve Büyüklük ile) kaydedildi! 🚀")
 
 if __name__ == "__main__":
     df = get_tefas_data_with_change()
