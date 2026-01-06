@@ -25,7 +25,7 @@ jobs:
 
       - name: Firebase Anahtarını Oluştur
         env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+          FIREBASE_KEY: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: |
           # 1. Anahtar var mı kontrol et
           if [ -z "$FIREBASE_KEY" ]; then
