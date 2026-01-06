@@ -2,22 +2,21 @@ name: Borsa Botu
 
 on:
   schedule:
-    # Her 15 dakikada bir çalış (Piyasa saatlerine göre ayarlanabilir)
-    - cron: '*/15 * * * *'
-  workflow_dispatch: # Elle tetiklemek için buton ekler
+    - cron: '*/15 * * * *' # 15 dakikada bir çalış
+  workflow_dispatch: # Elle tetiklemek için
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Depoyu Çek (Checkout)
+      - name: Depoyu Çek
         uses: actions/checkout@v3
 
-      - name: Python Kur
+      - name: Python Kurulumu (3.11)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11' # <-- KRİTİK DÜZELTME BURADA (3.9 DEĞİL)
 
       - name: Kütüphaneleri Yükle
         run: |
@@ -25,22 +24,15 @@ jobs:
 
       - name: Firebase Anahtarını Oluştur
         env:
+          # GitHub Secret ismin "FIREBASE_CREDENTIALS" olduğu için burayı düzelttik
           FIREBASE_KEY: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: |
-          # 1. Anahtar var mı kontrol et
           if [ -z "$FIREBASE_KEY" ]; then
-            echo "::error::HATA: FIREBASE_KEY GitHub Secret içinde bulunamadı veya boş!"
-            echo "Lütfen Settings > Secrets > Actions kısmına gidip anahtarı eklediğinden emin ol."
+            echo "::error::HATA: FIREBASE_KEY bulunamadı! Secret ayarlarını kontrol et."
             exit 1
           fi
-
-          # 2. Dosyayı oluştur
           echo "$FIREBASE_KEY" > firebase_key.json
-          
-          # 3. Dosyanın içini kontrol et (İlk 5 karakteri yazdırır, güvenlidir)
-          echo "Dosya oluşturuldu. Kontrol amaçlı başı şöyle görünüyor:"
-          head -c 5 firebase_key.json
-          echo "..."
+          echo "Anahtar başarıyla oluşturuldu."
 
       - name: Botu Çalıştır
         run: python bot.py
