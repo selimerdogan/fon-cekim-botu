@@ -1,4 +1,29 @@
-- name: Firebase Anahtarını Oluştur
+name: Borsa Botu
+
+on:
+  schedule:
+    # Her 15 dakikada bir çalış (Piyasa saatlerine göre ayarlanabilir)
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Elle tetiklemek için buton ekler
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Depoyu Çek (Checkout)
+        uses: actions/checkout@v3
+
+      - name: Python Kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Kütüphaneleri Yükle
+        run: |
+          pip install yfinance firebase-admin
+
+      - name: Firebase Anahtarını Oluştur
         env:
           FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
         run: |
@@ -16,3 +41,6 @@
           echo "Dosya oluşturuldu. Kontrol amaçlı başı şöyle görünüyor:"
           head -c 5 firebase_key.json
           echo "..."
+
+      - name: Botu Çalıştır
+        run: python bot.py
