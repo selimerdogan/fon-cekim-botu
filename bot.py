@@ -1,31 +1,38 @@
 import yfinance as yf
 import firebase_admin
 from firebase_admin import credentials, firestore
-import os
-
-# 1. Firebase Bağlantısı (GitHub Secrets'tan anahtarı alacak)
-# Not: Bu kısım için Firebase'den indirdiğin .json anahtarını kullanacağız
-cred = credentials.Certificate("firebase_key.json") 
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# ... (Firebase bağlantı kodların aynı kalsın) ...
 
 def veri_guncelle():
-    # 2. Veriyi Çek (SASA Örneği)
     hisse = yf.Ticker("SASA.IS")
-    # Son anlık veriyi al
+    
+    # 1. GEÇMİŞ VERİYİ ÇEK (Grafik İçin)
+    # period="1y" (1 yıl), interval="1d" (Günlük veri)
+    hist = hisse.history(period="1y", interval="1d")
+    
+    grafik_verisi = []
+    
+    # Veriyi grafik kütüphanesinin anlayacağı formata çeviriyoruz
+    for date, row in hist.iterrows():
+        grafik_verisi.append({
+            "timestamp": int(date.timestamp() * 1000), # JS için milisaniye
+            "value": row['Close'] # Kapanış fiyatı
+        })
+
+    # 2. GÜNCEL VERİYİ AL (Başlık İçin)
     info = hisse.info 
     
     veri = {
         "sembol": "SASA",
         "fiyat": info.get('currentPrice'),
-        "degisim_yuzde": info.get('recommendationMean'), # Örnek veri
-        "son_guncelleme": firestore.SERVER_TIMESTAMP
+        "degisim": info.get('recommendationMean'), # Örnek
+        "son_guncelleme": firestore.SERVER_TIMESTAMP,
+        "chart_data": grafik_verisi  # <--- İşte grafiği çizecek olan liste bu!
     }
 
-    # 3. Firebase'e Yaz
-    # 'hisseler' koleksiyonunda 'SASA' dökümanını günceller
+    # Firebase'e yaz
     db.collection("hisseler").document("SASA").set(veri)
-    print("SASA verisi Firebase'e gönderildi.")
+    print("SASA grafik verisiyle birlikte güncellendi.")
 
 if __name__ == "__main__":
     veri_guncelle()
