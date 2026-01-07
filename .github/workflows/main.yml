@@ -2,7 +2,7 @@ name: Borsa Botu
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # 15 dakikada bir çalış
+    - cron: '*/15 * * * *' # Her 15 dakikada bir çalış
   workflow_dispatch: # Elle tetiklemek için
 
 jobs:
@@ -16,15 +16,14 @@ jobs:
       - name: Python Kurulumu (3.11)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11' # <-- KRİTİK DÜZELTME BURADA (3.9 DEĞİL)
+          python-version: '3.11'
 
       - name: Kütüphaneleri Yükle
         run: |
-          pip install yfinance firebase-admin
+          pip install -r requirements.txt
 
       - name: Firebase Anahtarını Oluştur
         env:
-          # GitHub Secret ismin "FIREBASE_CREDENTIALS" olduğu için burayı düzelttik
           FIREBASE_KEY: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: |
           if [ -z "$FIREBASE_KEY" ]; then
@@ -32,7 +31,8 @@ jobs:
             exit 1
           fi
           echo "$FIREBASE_KEY" > firebase_key.json
-          echo "Anahtar başarıyla oluşturuldu."
 
       - name: Botu Çalıştır
+        env:
+          CMC_API_KEY: ${{ secrets.CMC_API_KEY }} # Varsa CoinMarketCap anahtarın
         run: python bot.py
