@@ -2,8 +2,8 @@ name: Borsa Botu
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # Her 15 dakikada bir çalış
-  workflow_dispatch: # Elle tetiklemek için
+    - cron: '*/30 * * * *' # <-- DÜZELTME: Artık 30 dakikada bir çalışacak
+  workflow_dispatch: # Elle tetiklemek için buton
 
 jobs:
   build:
@@ -22,17 +22,25 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      # ADIM 1: Anahtarı JSON dosyasına dök (Yedek)
       - name: Firebase Anahtarını Oluştur
         env:
+          # BURASI ÖNEMLİ: Senin "FIREBASE_CREDENTIALS" şifreni alıp
+          # kodun beklediği "FIREBASE_KEY" değişkenine atıyoruz.
           FIREBASE_KEY: ${{ secrets.FIREBASE_CREDENTIALS }}
         run: |
           if [ -z "$FIREBASE_KEY" ]; then
-            echo "::error::HATA: FIREBASE_KEY bulunamadı! Secret ayarlarını kontrol et."
+            echo "::error::HATA: FIREBASE_CREDENTIALS Secret'ı boş veya bulunamadı!"
             exit 1
           fi
+          # Dosyayı oluştur
           echo "$FIREBASE_KEY" > firebase_key.json
+          echo "✅ firebase_key.json dosyası oluşturuldu."
 
+      # ADIM 2: Botu Çalıştır
       - name: Botu Çalıştır
         env:
-          CMC_API_KEY: ${{ secrets.CMC_API_KEY }} # Varsa CoinMarketCap anahtarın
+          # Koda anahtarı doğrudan da veriyoruz (Garanti olsun)
+          FIREBASE_KEY: ${{ secrets.FIREBASE_CREDENTIALS }}
+          CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
         run: python bot.py
