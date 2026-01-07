@@ -6,3 +6,5 @@ yfinance
 tefas-crawler
 selenium
 webdriver-manager
+Pillow
+
