@@ -11,7 +11,6 @@ import json
 import time
 
 # --- AYARLAR ---
-# GitHub Actions environment variable kontrolü
 if os.environ.get('FIREBASE_KEY'):
     cred = credentials.Certificate(json.loads(os.environ.get('FIREBASE_KEY')))
 elif os.path.exists("serviceAccountKey.json"):
@@ -25,6 +24,9 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 def save_to_firebase_batch(data_list, collection_name="market_grafigi"):
+    if not data_list:
+        return
+
     batch = db.batch()
     counter = 0
     total = 0
@@ -32,8 +34,8 @@ def save_to_firebase_batch(data_list, collection_name="market_grafigi"):
     print(f"💾 {len(data_list)} adet veri Firebase'e yazılıyor...")
     
     for item in data_list:
-        # ÖNEMLİ DÜZELTME: Sembol içinde '/' varsa '_' ile değiştir
-        # Firebase '/' karakterini alt koleksiyon sanıyor.
+        # ÖNEMLİ DÜZELTME: Sembol içinde '/' varsa '_' ile değiştir (Örn: JPM/PL -> JPM_PL)
+        # Firebase '/' karakterini alt koleksiyon sanıyor ve patlıyor.
         safe_symbol = item['symbol'].replace("/", "_")
         
         doc_id = f"{item['prefix']}_{safe_symbol}"
@@ -69,20 +71,20 @@ def get_tefas_history():
     print("--- 1. TEFAS Fon Geçmişi Çekiliyor ---")
     crawler = Crawler()
     
-    # Bugün ve 1 yıl öncesi
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    # SENİN SİSTEM SAATİNİ KULLANIYORUZ (2026)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365) # Son 1 Yıl
     
-    print(f"   📅 Tarih: {start_date} - {end_date}")
+    s_str = start_date.strftime("%Y-%m-%d")
+    e_str = end_date.strftime("%Y-%m-%d")
+    
+    print(f"   📅 Tarih Aralığı: {s_str} - {e_str}")
     
     try:
-        df = crawler.fetch(start=start_date, end=end_date, columns=["code", "date", "price"])
+        df = crawler.fetch(start=s_str, end=e_str, columns=["code", "date", "price"])
         
         if df is None or df.empty:
-            print("   ⚠️ TEFAS verisi boş geldi (API sorunu olabilir).")
-            # Fallback: Belki tarih aralığı sorundur, son 30 günü deneyelim en azından grafik boş kalmasın
-            # start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-            # df = crawler.fetch(start=start_date, end=end_date, columns=["code", "date", "price"])
+            print("   ⚠️ TEFAS verisi boş geldi.")
             return
 
         df['date'] = pd.to_datetime(df['date'])
@@ -111,41 +113,49 @@ def get_tefas_history():
         print(f"   ❌ TEFAS Hatası: {e}")
 
 # ==============================================================================
-# 2. YFINANCE MODÜLÜ (DÜZELTİLMİŞ)
+# 2. YFINANCE MODÜLÜ (2026 UYUMLU)
 # ==============================================================================
 def process_yfinance_tickers(ticker_list, prefix, asset_type, suffix=""):
     if not ticker_list:
         return
 
-    # DÜZELTME 1: Yahoo Finance için Sembol Temizliği
-    # TradingView "BRK.B" verir, Yahoo "BRK-B" ister.
-    # Ayrıca "/" içeren (JPM/PL gibi) imtiyazlı hisseleri filtreleyelim, genelde sorun çıkarır.
-    
     clean_tickers = []
-    original_map = {} # Yahoo sembolü -> Orijinal sembol eşleşmesi
+    original_map = {}
 
     for t in ticker_list:
-        if "/" in t: continue # Slash içerenleri (Preferred stocks) atla, Firebase'i bozar.
-        
-        yahoo_symbol = t.replace(".", "-") # BRK.B -> BRK-B
+        # Slash '/' içerenleri (JPM/PL vb.) filtrelemesek bile aşağıda replace ediyoruz ama
+        # YFinance genelde bunları bulamaz. Yine de listede kalsın, clean_tickers'a ekleyelim.
+        if "/" in t:
+             # Yahoo formatı: JPM-PL veya JPM-pL olabilir, denemek lazım ama genelde -p eklenir.
+             # Şimdilik risk almamak için replace ediyoruz.
+             yahoo_symbol = t.replace("/", "-") 
+        else:
+             yahoo_symbol = t.replace(".", "-") # BRK.B -> BRK-B
+
         full_symbol = f"{yahoo_symbol}{suffix}"
-        
         clean_tickers.append(full_symbol)
-        original_map[full_symbol] = t # Orijinal ismini sakla
+        original_map[full_symbol] = t # Orijinal ismi sakla
 
     print(f"--- {prefix} ({len(clean_tickers)} Adet) Geçmiş Veri İndiriliyor ---")
     
     if not clean_tickers:
-        print("   ⚠️ İndirilecek geçerli sembol kalmadı.")
         return
 
     try:
-        # thread sayısını düşürdük, Yahoo bazen IP ban atıyor
-        data = yf.download(clean_tickers, period="1y", interval="1d", group_by='ticker', progress=False, threads=False) 
+        # SENİN SİSTEM SAATİNİ KULLANIYORUZ
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)
+        
+        # threads=False: IP ban yememek için güvenli mod
+        data = yf.download(clean_tickers, start=start_date, end=end_date, interval="1d", group_by='ticker', progress=False, threads=False) 
         
         results = []
         
-        # Tek sembol kontrolü
+        if data.empty:
+            print("   ⚠️ YFinance hiç veri döndürmedi (Tarih aralığında veri yok).")
+            return
+
+        # Tekil sembol kontrolü
         if len(clean_tickers) == 1:
             iterator = [(clean_tickers[0], data)]
         else:
@@ -153,11 +163,13 @@ def process_yfinance_tickers(ticker_list, prefix, asset_type, suffix=""):
 
         for symbol_raw, df_symbol in iterator:
             try:
-                if df_symbol.empty or 'Close' not in df_symbol.columns:
-                    continue
+                if df_symbol.empty: continue
+                # Sütun kontrolü (Bazen sadece Open/High döner, Close olmaz)
+                if 'Close' not in df_symbol.columns: continue
                 
-                # NaN değerleri temizle
+                # NaN temizliği
                 df_clean = df_symbol.dropna(subset=['Close'])
+                if df_clean.empty: continue
                 
                 history_data = []
                 for date, row in df_clean.iterrows():
@@ -169,7 +181,9 @@ def process_yfinance_tickers(ticker_list, prefix, asset_type, suffix=""):
                         "c": round(float(val), 4)
                     })
                 
-                # Firebase'e kaydederken Orijinal Sembolü kullanalım (BRK.B görünsün)
+                if not history_data: continue
+
+                # Firebase'e kaydederken Orijinal Sembolü (örn: BRK.B) kullanalım
                 real_symbol_name = original_map.get(symbol_raw, symbol_raw.replace(suffix, ""))
                 
                 results.append({
@@ -188,44 +202,28 @@ def process_yfinance_tickers(ticker_list, prefix, asset_type, suffix=""):
         print(f"   ❌ YFinance Hatası ({prefix}): {e}")
 
 # ==============================================================================
-# SEMBOL LİSTELERİ
-# ==============================================================================
-def get_bist_symbols():
-    url = "https://scanner.tradingview.com/turkey/scan"
-    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}],
-               "columns": ["name"], "range": [0, 100]}
-    try:
-        r = requests.post(url, json=payload).json()
-        return [x['d'][0] for x in r['data']]
-    except: return ["THYAO", "GARAN"]
-
-def get_us_symbols():
-    # ABD için en büyük 50
-    url = "https://scanner.tradingview.com/america/scan"
-    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}], # Sadece STOCK, DR/Preferred yok
-               "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-               "columns": ["name"], "range": [0, 50]} 
-    try:
-        r = requests.post(url, json=payload).json()
-        return [x['d'][0] for x in r['data']]
-    except: return ["AAPL", "MSFT"]
-
-def get_crypto_symbols():
-    return ["BTC", "ETH", "SOL", "BNB", "XRP", "AVAX"]
-
-# ==============================================================================
 # MAIN
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 GEÇMİŞ VERİ BOTU BAŞLATILIYOR...\n")
+    print(f"🚀 GEÇMİŞ VERİ BOTU BAŞLATILIYOR... (Sistem Tarihi: {datetime.now().strftime('%Y-%m-%d')})\n")
     
+    # 1. TEFAS
     get_tefas_history()
-    process_yfinance_tickers(get_crypto_symbols(), prefix="CRYPTO", asset_type="crypto", suffix="-USD")
-    process_yfinance_tickers(get_bist_symbols(), prefix="BIST", asset_type="stock", suffix=".IS")
-    process_yfinance_tickers(get_us_symbols(), prefix="US", asset_type="stock", suffix="")
     
+    # 2. KRİPTO
+    process_yfinance_tickers(["BTC", "ETH", "SOL", "BNB", "XRP", "AVAX"], prefix="CRYPTO", asset_type="crypto", suffix="-USD")
+    
+    # 3. BIST (Manuel Örnek Liste - Hızlı Test İçin)
+    bist_ornek = ["THYAO", "GARAN", "AKBNK", "EREGL", "ASELS", "SISE", "KCHOL", "BIMAS"] 
+    process_yfinance_tickers(bist_ornek, prefix="BIST", asset_type="stock", suffix=".IS")
+    
+    # 4. ABD (Manuel Örnek Liste)
+    us_ornek = ["AAPL", "MSFT", "TSLA", "NVDA", "GOOGL", "AMZN", "META"]
+    process_yfinance_tickers(us_ornek, prefix="US", asset_type="stock", suffix="")
+    
+    # 5. FX & ALTIN
     print("--- 5. Altın ve Döviz ---")
-    # CMD (Gold) hatasını çözmek için sadece FX kullanıyoruz
-    process_yfinance_tickers(["TRY=X", "EURTRY=X", "XAUUSD=X"], prefix="FX", asset_type="currency", suffix="")
+    # XAUUSD=X yerine GC=F (Gold Futures) daha sağlıklıdır
+    process_yfinance_tickers(["TRY=X", "EURTRY=X", "GC=F"], prefix="FX", asset_type="currency", suffix="")
     
     print("\n✅ TÜM İŞLEMLER TAMAMLANDI.")
