@@ -15,13 +15,14 @@ jobs:
       - name: Kodları Çek
         uses: actions/checkout@v3
 
-      - name: Python Kurulumu
+      - name: Python Kurulumu (GÜNCELLENDİ)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11'  # <-- KRİTİK DEĞİŞİKLİK: 3.9 YERİNE 3.11 YAPTIK
 
       - name: Kütüphaneleri Yükle
         run: |
+          pip install --upgrade pip
           pip install pandas firebase-admin tefas-crawler yfinance requests
 
       - name: Firebase Key Oluştur
