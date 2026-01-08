@@ -1,1 +1,34 @@
-aaaa
+name: Günlük Grafik Güncellemesi (Kapanış)
+
+on:
+  workflow_dispatch: # Manuel tetikleme butonu
+  schedule:
+    # UTC 15:45 = TR Saati ile 18:45
+    # Sadece Hafta içi
+    - cron: '45 15 * * 1-5'
+
+jobs:
+  run-history-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kodları Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Kütüphaneleri Yükle
+        run: |
+          pip install pandas firebase-admin tefas-crawler yfinance requests
+
+      - name: Firebase Key Oluştur
+        env:
+          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+        run: |
+          echo $FIREBASE_KEY > serviceAccountKey.json
+
+      - name: Grafik Botunu Çalıştır
+        run: python history_bot.py
