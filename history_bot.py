@@ -18,7 +18,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-def save_to_firebase_batch(data_list, collection_name="market_history"):
+def save_to_firebase_batch(data_list, collection_name="market_grafigi"):
     """
     Verileri 400'lü paketler halinde Firebase'e yazar.
     """
@@ -247,3 +247,4 @@ if __name__ == "__main__":
     process_yfinance_tickers(["GC=F"], prefix="CMD", asset_type="gold", suffix="") # GC=F = Gold Futures
 
     print("\n✅ TÜM İŞLEMLER TAMAMLANDI.")
+
