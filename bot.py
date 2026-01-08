@@ -363,3 +363,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"KRİTİK HATA: {e}")
         sys.exit(1)
+
