@@ -3,8 +3,8 @@ name: Günlük Grafik Güncellemesi (Kapanış)
 on:
   workflow_dispatch: # Manuel tetikleme butonu
   schedule:
-    # UTC 15:45 = TR Saati ile 18:45
-    # Sadece Hafta içi
+    # UTC 15:45 = Türkiye Saati 18:45 (Borsa kapanışı sonrası)
+    # Sadece Hafta içi (Pzt-Cum) çalışır
     - cron: '45 15 * * 1-5'
 
 jobs:
@@ -15,10 +15,10 @@ jobs:
       - name: Kodları Çek
         uses: actions/checkout@v3
 
-      - name: Python Kurulumu (GÜNCELLENDİ)
+      - name: Python Kurulumu (3.11 Sürümü)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'  # <-- KRİTİK DEĞİŞİKLİK: 3.9 YERİNE 3.11 YAPTIK
+          python-version: '3.11'  # <--- BURASI ÇOK ÖNEMLİ (Eskiden 3.9'du)
 
       - name: Kütüphaneleri Yükle
         run: |
